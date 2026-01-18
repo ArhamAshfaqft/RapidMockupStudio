@@ -23,7 +23,8 @@ function createWindow() {
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f5f5f7',
-    show: false
+    show: false,
+    icon: path.join(__dirname, '../../assets/icon.png')
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
