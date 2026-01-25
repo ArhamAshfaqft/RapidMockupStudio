@@ -1,2 +1,0 @@
-Verification push for version 1.0. 
-You can delete this file after you see it on GitHub.
