@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createLibraryCategory: (name) => ipcRenderer.invoke('create-library-category', name),
   addLibraryMockup: (data) => ipcRenderer.invoke('add-library-mockup', data),
   deleteLibraryCategory: (name) => ipcRenderer.invoke('delete-library-category', name),
+  deleteLibraryMockup: (filePath) => ipcRenderer.invoke('delete-library-mockup', filePath), // NEW
   openPathFolder: (path) => ipcRenderer.invoke('open-path-folder', path),
 
   // Auto-Updater
@@ -21,5 +22,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startDownload: () => ipcRenderer.invoke('start-download'),
   quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),
   onUpdateStatus: (callback) => ipcRenderer.on('update-status', (event, data) => callback(data)),
-  onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (event, data) => callback(data))
+  onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (event, data) => callback(data)),
+
+  // Utils
+  pathJoin: (...args) => ipcRenderer.invoke('path-join', ...args),
+  isWindows: process.platform === 'win32' // NEW: Expose platform for path separator logic
 });

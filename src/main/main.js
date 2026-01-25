@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -24,7 +24,7 @@ function createWindow() {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f5f5f7',
     show: false,
-    icon: path.join(__dirname, '../../assets/icon.png')
+    icon: path.join(__dirname, '../../assets/icon_safe.png')
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -43,12 +43,16 @@ function createWindow() {
   });
 
   autoUpdater.on('update-not-available', () => {
-    if (mainWindow) mainWindow.webContents.send('update-status', { status: 'not-available', message: 'You are up to date.' });
+    if (mainWindow) mainWindow.webContents.send('update-status', { status: 'not-available', message: 'You are already on the latest version.' });
   });
 
   autoUpdater.on('error', (err) => {
-    if (mainWindow) mainWindow.webContents.send('update-status', { status: 'error', message: 'Error checking for updates.' });
     console.error('AutoUpdater Error:', err);
+    // Treat network/missing-file errors as "No updates" to avoid scaring user
+    if (mainWindow) mainWindow.webContents.send('update-status', {
+      status: 'not-available',
+      message: 'No new updates available.'
+    });
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
@@ -60,7 +64,20 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  // Register custom protocol for local files
+  protocol.registerFileProtocol('safe-file', (request, callback) => {
+    const url = request.url.replace('safe-file://', '');
+    try {
+      return callback(decodeURIComponent(url));
+    } catch (error) {
+      console.error(error);
+      return callback(404);
+    }
+  });
+
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -76,19 +93,27 @@ app.on('activate', () => {
 ipcMain.handle('check-for-updates', () => {
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
     if (mainWindow) {
-      mainWindow.webContents.send('update-status', { status: 'checking', message: 'Checking (Dev Simulation)...' });
+      mainWindow.webContents.send('update-status', { status: 'checking', message: 'Checking (Dev Mode)...' });
       setTimeout(() => {
-        // Simulate Update Available
         mainWindow.webContents.send('update-status', {
-          status: 'available',
-          message: 'Version 1.1.0 available!',
-          version: '1.1.0'
+          status: 'not-available',
+          message: 'Auto-Update is disabled in Development Mode. Please test in installed app.'
         });
-      }, 2000);
+      }, 1000);
     }
     return;
   }
-  autoUpdater.checkForUpdatesAndNotify();
+
+  try {
+    autoUpdater.checkForUpdatesAndNotify();
+  } catch (err) {
+    console.error("Update Check Failed:", err);
+    // Treat error as "No updates" for better UX
+    if (mainWindow) mainWindow.webContents.send('update-status', {
+      status: 'not-available',
+      message: 'No new updates available.'
+    });
+  }
 });
 
 ipcMain.handle('start-download', () => {
@@ -173,10 +198,10 @@ ipcMain.handle('scan-folder', async (event, folderPath) => {
     const imageFiles = files
       .filter(file => /\.(png|jpe?g)$/i.test(file))
       .map(file => path.join(folderPath, file));
-    return imageFiles;
+    return { path: folderPath, files: imageFiles };
   } catch (err) {
     console.error('Error scanning folder:', err);
-    return [];
+    return null;
   }
 });
 
@@ -185,7 +210,17 @@ ipcMain.handle('select-input-folder', async () => {
     properties: ['openDirectory']
   });
   if (!result.canceled && result.filePaths.length > 0) {
-    return result.filePaths[0];
+    const folderPath = result.filePaths[0];
+    try {
+      const files = fs.readdirSync(folderPath);
+      const imageFiles = files
+        .filter(file => /\.(png|jpe?g)$/i.test(file))
+        .map(file => path.join(folderPath, file));
+      return { path: folderPath, files: imageFiles };
+    } catch (e) {
+      console.error("Error scanning selected input folder:", e);
+      return { path: folderPath, files: [] };
+    }
   }
   return null;
 });
@@ -216,6 +251,13 @@ ipcMain.handle('save-rendered-image', async (event, { filePath, dataBase64 }) =>
   try {
     const base64Data = dataBase64.replace(/^data:image\/\w+;base64,/, "");
     const buffer = Buffer.from(base64Data, 'base64');
+
+    // Ensure dir exists
+    const dirname = path.dirname(filePath);
+    if (!fs.existsSync(dirname)) {
+      fs.mkdirSync(dirname, { recursive: true });
+    }
+
     fs.writeFileSync(filePath, buffer);
     console.log(`Saved: ${filePath}`);
     return true;
@@ -227,7 +269,9 @@ ipcMain.handle('save-rendered-image', async (event, { filePath, dataBase64 }) =>
 
 // Library Handlers
 ipcMain.handle('scan-library', async () => {
-  const libraryPath = path.join(app.isPackaged ? path.dirname(app.getPath('exe')) : '.', 'Library');
+  // Fix: Use path.resolve('.') for Dev mode to get absolute path (D:\...) instead of relative 'Library'
+  const basePath = app.isPackaged ? path.dirname(app.getPath('exe')) : path.resolve('.');
+  const libraryPath = path.join(basePath, 'Library');
 
   // Ensure Library exists
   if (!fs.existsSync(libraryPath)) {
@@ -260,7 +304,8 @@ ipcMain.handle('scan-library', async () => {
 });
 
 ipcMain.handle('save-to-library', async (event, { category, filePath }) => {
-  const libraryPath = path.join(app.isPackaged ? path.dirname(app.getPath('exe')) : '.', 'Library');
+  const basePath = app.isPackaged ? path.dirname(app.getPath('exe')) : path.resolve('.');
+  const libraryPath = path.join(basePath, 'Library');
   const catPath = path.join(libraryPath, category);
 
   if (!fs.existsSync(catPath)) {
@@ -310,6 +355,30 @@ ipcMain.handle('open-path-folder', async (event, folderPath) => {
     return error ? false : true;
   } catch (err) {
     console.error('Error opening folder:', err);
+    return false;
+  }
+});
+
+ipcMain.handle('path-join', (event, ...args) => {
+  return path.join(...args);
+});
+
+ipcMain.handle('delete-library-mockup', async (event, filePath) => {
+  try {
+    // shell.trashItem allows "Moving to Recycle Bin" which is safer and less prone to EBUSY locks
+    await shell.trashItem(filePath);
+    return true;
+  } catch (err) {
+    console.error('Error deleting mockup:', err);
+    // Fallback: If trash fails, try force unlink
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        return true;
+      }
+    } catch (err2) {
+      console.error('Fallback verify failed:', err2);
+    }
     return false;
   }
 });

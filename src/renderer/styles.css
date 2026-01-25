@@ -108,10 +108,29 @@ body {
 
 .section-label {
   display: block;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
+  font-size: 13px;
+  /* Visual bump */
+  font-weight: 600;
+  color: var(--text-primary);
+  /* Darker for better contrast */
+  margin-bottom: 4px;
+  /* Reduced to fit description */
+}
+
+.step-description {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.step-label-small {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
 }
 
 .file-info {
@@ -451,7 +470,6 @@ body {
 
 #custom-width-group {
   margin-top: 10px;
-  animation: fadeIn 0.3s ease;
 }
 
 @keyframes fadeIn {
@@ -597,9 +615,54 @@ body {
   gap: 20px;
 }
 
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--border-color);
+  transition: .4s;
+  border-radius: 20px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+input:checked+.toggle-slider {
+  background-color: var(--accent-color);
+}
+
+input:checked+.toggle-slider:before {
+  transform: translateX(16px);
+}
+
 .library-item {
-  background: var(--bg-secondary);
-  border-radius: var(--radius-md);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
   cursor: pointer;
@@ -609,6 +672,8 @@ body {
   aspect-ratio: 1;
   /* Square thumbnails */
   position: relative;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
 }
 
 .library-item img {
@@ -620,6 +685,38 @@ body {
 .library-item:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
+}
+
+/* Delete Mockup Icon (Grid) */
+.library-item-delete {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ff3b30;
+  /* Red */
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: all 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.library-item:hover .library-item-delete {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.library-item-delete:hover {
+  background: #ff3b30;
+  color: white;
 }
 
 .library-item.selected {

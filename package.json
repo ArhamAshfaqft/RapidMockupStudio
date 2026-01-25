@@ -11,7 +11,7 @@
   },
   "build": {
     "appId": "com.rapidmock.studio",
-    "productName": "RapidMockup Studio",
+    "productName": "Rapid Mockup Studio",
     "directories": {
       "output": "dist"
     },
@@ -19,9 +19,28 @@
       "src/**/*",
       "node_modules/**/*"
     ],
+    "extraFiles": [
+      {
+        "from": "Library",
+        "to": "Library",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
-      "target": "nsis",
-      "icon": "assets/icon.ico"
+      "target": [
+        "nsis",
+        "nsis-web"
+      ],
+      "icon": "assets/icon_safe.png",
+      "executableName": "RMS"
+    },
+    "nsisWeb": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "appPackageUrl": "https://github.com/ArhamAshfaqft/RapidMockupStudio/releases/download/v1.0.0/",
+      "artifactName": "RMS Web Setup ${version}.${ext}"
     },
     "mac": {
       "target": "dmg",
@@ -29,7 +48,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "RMS Setup ${version}.${ext}"
     },
     "publish": [
       {
@@ -58,6 +78,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.7.3",
+    "image-size": "^2.0.2",
     "pixi.js": "^7.3.2"
   }
 }

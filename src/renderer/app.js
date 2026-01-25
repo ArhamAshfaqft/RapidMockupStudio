@@ -1,5 +1,5 @@
 /**
- * RapidMock Studio - Professional Offline Mockup Generator
+ * Rapid Mockup Studio - Professional Offline Mockup Generator
  * Core rendering engine using Pixi.js WebGL with Advanced Realism Engine
  */
 
@@ -65,10 +65,26 @@ class RapidMockStudio {
     this.initAutoUpdater();
   }
 
+  saveSettings() {
+    // Basic persistence to localStorage
+    try {
+      localStorage.setItem('rapidmock-settings', JSON.stringify(this.settings));
+    } catch (e) { console.error("Failed to save settings", e); }
+  }
+
   loadSettings() {
     // Default Settings
     if (!this.settings.exportPreset) this.settings.exportPreset = 'original';
     if (!this.settings.customExportWidth) this.settings.customExportWidth = 2000;
+
+    // Load from storage
+    try {
+      const saved = localStorage.getItem('rapidmock-settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        this.settings = { ...this.settings, ...parsed };
+      }
+    } catch (e) { console.error(e); }
 
     // Apply to UI
     if (this.presetSelect) {
@@ -161,12 +177,29 @@ class RapidMockStudio {
     this.btnOpenFolder = document.getElementById('btn-open-folder');
     this.btnAutoFit = document.getElementById('btn-auto-fit');
 
+    // Generate Button & Count
+    this.btnGenerate = document.getElementById('btn-generate');
+    this.fileCount = document.getElementById('file-count');
+
+    // Batch Toggle Elements
+    this.batchToggle = document.getElementById('batch-toggle');
+    this.btnSingleDesign = document.getElementById('btn-select-single-design');
+    // We already have this.btnSelectInput for folder
+    // We need to reference the "Select Folder" button more generally maybe?
+    // Actually this.btnSelectInput is fine.
+
     // Export Preset Elements
+    this.exportFormatSelect = document.getElementById('export-format'); // NEW: Bind Format Select
     this.presetSelect = document.getElementById('export-preset');
     this.customWidthGroup = document.getElementById('custom-width-group');
     this.customWidthInput = document.getElementById('custom-width-input');
     this.customWidthInput = document.getElementById('custom-width-input');
     this.customHeightInput = document.getElementById('custom-height-input');
+
+    // Dynamic UX Elements
+    this.step2Label = document.getElementById('step-2-label');
+    this.step2Desc = document.getElementById('step-2-desc');
+    this.step4Container = document.getElementById('step-4-container');
 
     // Mockup Color
     this.checkboxEnableTint = document.getElementById('checkbox-enable-tint');
@@ -190,6 +223,18 @@ class RapidMockStudio {
 
     this.btnSelectInput.addEventListener('click', () => this.selectInputFolder());
     this.btnSelectOutput.addEventListener('click', () => this.selectOutputFolder());
+
+    // Batch Toggle Listener
+    if (this.batchToggle) {
+      this.batchToggle.addEventListener('change', (e) => {
+        this.toggleBatchMode(e.target.checked);
+      });
+    }
+
+    // Single Design Selection
+    if (this.btnSingleDesign) {
+      this.btnSingleDesign.addEventListener('click', () => this.selectSingleDesignInput());
+    }
 
     // Auto Fit Button
     if (this.btnAutoFit) {
@@ -329,9 +374,56 @@ class RapidMockStudio {
         }
       });
     }
+
+    // Keyboard Nudging (Canva/Figma style)
+    window.addEventListener('keydown', (e) => {
+      // Only active if a design is selected or exists
+      if (!this.designSprite || !this.originalWidth) return;
+
+      // Ignore if user is typing in an input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      const stepPixels = 1; // 1 pixel nudge
+      const stepX = stepPixels / this.originalWidth;
+      const stepY = stepPixels / this.originalHeight;
+
+      let handled = false;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          this.designPosition.x -= stepX;
+          handled = true;
+          break;
+        case 'ArrowRight':
+          this.designPosition.x += stepX;
+          handled = true;
+          break;
+        case 'ArrowUp':
+          this.designPosition.y -= stepY;
+          handled = true;
+          break;
+        case 'ArrowDown':
+          this.designPosition.y += stepY;
+          handled = true;
+          break;
+      }
+
+      if (handled) {
+        e.preventDefault(); // Prevent scrolling
+        this.updateDesignTransform();
+      }
+    });
   }
 
   setupPresetListeners() {
+    // NEW: Export Format Listener
+    if (this.exportFormatSelect) {
+      this.exportFormatSelect.addEventListener('change', (e) => {
+        this.settings.exportFormat = e.target.value;
+        this.saveSettings();
+      });
+    }
+
     this.presetSelect.addEventListener('change', (e) => {
       this.settings.exportPreset = e.target.value;
       this.toggleCustomWidth();
@@ -349,13 +441,19 @@ class RapidMockStudio {
   }
 
   updateHeightDisplay() {
+    // We no longer enforce auto-height. User can edit it.
+    // If they haven't set a height manually yet, we could suggest one, but for now let's just leave it open.
+    // Or better: Only update if it's currently empty or "Auto"
     if (this.customHeightInput) {
-      if (this.background && this.background.texture && this.background.texture.valid) {
-        const aspect = this.background.texture.width / this.background.texture.height;
-        const h = Math.round(this.settings.customExportWidth / aspect);
-        this.customHeightInput.value = h;
-      } else {
-        this.customHeightInput.value = "Auto";
+      this.customHeightInput.disabled = false;
+      this.customHeightInput.readOnly = false;
+
+      if (this.customHeightInput.value === 'Auto' || this.customHeightInput.value === '') {
+        if (this.background && this.background.texture && this.background.texture.valid) {
+          const aspect = this.background.texture.width / this.background.texture.height;
+          const h = Math.round(this.settings.customExportWidth / aspect);
+          this.customHeightInput.value = h;
+        }
       }
     }
   }
@@ -366,11 +464,8 @@ class RapidMockStudio {
     // Use DOM value directly to be safe
     const isCustom = this.presetSelect.value === 'custom';
 
-    // Force style update
-    this.customWidthGroup.style.display = isCustom ? 'block' : 'none';
-
-    // Also update visibility property just in case of weird CSS conflicts
-    this.customWidthGroup.style.visibility = isCustom ? 'visible' : (isCustom ? 'visible' : 'inherit');
+    // Force style update with priority
+    this.customWidthGroup.style.setProperty('display', isCustom ? 'block' : 'none', 'important');
 
     if (isCustom) {
       this.updateHeightDisplay();
@@ -482,6 +577,9 @@ class RapidMockStudio {
         // BUT App expects this.mockupData structure {name, path, data}
         const reader = new FileReader();
         reader.onload = (e) => {
+          // FIX: Clear any previous batch queue
+          this.mockupQueue = [];
+
           this.mockupData = {
             name: info.name,
             path: info.path,
@@ -501,21 +599,63 @@ class RapidMockStudio {
       const info = await window.electronAPI.getDroppedFilePath(file.path);
       if (info && info.isDirectory) {
         // It's a folder, trigger load
-        // We can't reuse selectInputFolder() easily because it calls dialog
-        // We need a way to scan folder by path.
-        // Let's use IPC for that. We already have 'select-input-folder' logic in main.
-        // We should expose a 'scan-input-folder' method.
-        // For now, I'll modify main.js to allow passing path to scan? No, separate is cleaner.
-        // Or I can just rely on the user to drop a folder and trust it?
-        // Let's assume (file.path) is correct.
-        // I will add 'scan-folder' to preload/main.
         const result = await window.electronAPI.scanFolder(file.path);
         if (result) {
-          this.inputFolder = result.path;
-          this.designFiles = result.files;
-          this.inputInfo.textContent = `${result.files.length} files in ${result.path.split(/[\\/]/).pop()}`;
-          this.updateGenerateButton();
+          let files = result.files || result;
+          let folderPath = result.path || file.path;
+
+          if (Array.isArray(files)) {
+            // Force Batch Mode if Folder Dropped
+            if (this.batchToggle && !this.batchToggle.checked) {
+              this.batchToggle.checked = true;
+              this.toggleBatchMode(true);
+            }
+
+            this.inputFolder = folderPath;
+            this.designFiles = files;
+            this.inputInfo.textContent = `${files.length} files in ${folderPath.split(/[\\/]/).pop()}`;
+
+            // Auto-set Output Folder
+            try {
+              const processedPath = await window.electronAPI.pathJoin(this.inputFolder, 'processed');
+              this.outputFolder = processedPath;
+              this.outputInfo.textContent = 'Auto: ' + processedPath.split(/[\\/]/).pop();
+              this.outputInfo.title = processedPath;
+            } catch (e) { console.error("Auto-output failed:", e); }
+
+            this.updateGenerateButton();
+          }
         }
+      } else if (info && info.isFile && /\.(png|jpe?g)$/i.test(info.name)) {
+        // SINGLE FILE DROPPED
+
+        // Force Single Mode
+        if (this.batchToggle && this.batchToggle.checked) {
+          this.batchToggle.checked = false;
+          this.toggleBatchMode(false);
+        }
+
+        this.inputFolder = null;
+        this.designFiles = [info.path];
+        this.inputInfo.textContent = "1 file selected: " + info.name;
+
+        // Auto-Preview (Read file to update Canvas)
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          this.loadDesignToCanvas(e.target.result);
+        };
+        reader.readAsDataURL(file); // file object from drop event has native file access
+
+        // Auto Output
+        try {
+          const sep = window.electronAPI.isWindows ? '\\' : '/';
+          const parentDir = info.path.substring(0, info.path.lastIndexOf(sep));
+          const processedPath = await window.electronAPI.pathJoin(parentDir, 'processed');
+          this.outputFolder = processedPath;
+          this.outputInfo.textContent = 'Auto: processed';
+        } catch (e) { console.error("Auto-output single failed:", e); }
+
+        this.updateGenerateButton();
       }
     }
   }
@@ -532,9 +672,117 @@ class RapidMockStudio {
     }
   }
 
+  toggleBatchMode(isBatch) {
+    // Show/Hide buttons based on mode
+    if (isBatch) {
+      this.btnSelectInput.classList.remove('hidden');
+      this.btnSingleDesign.classList.add('hidden');
+      this.inputInfo.textContent = ''; // Clear info when switching
+
+      // Update Labels
+      if (this.step2Label) this.step2Label.textContent = 'Design Folder';
+      if (this.step2Desc) this.step2Desc.textContent = 'Select the folder containing your design files.';
+
+      // Show Step 4 (Sample Design) is visible in Batch Mode
+      if (this.step4Container) this.step4Container.classList.remove('hidden');
+
+    } else {
+      this.btnSelectInput.classList.add('hidden');
+      this.btnSingleDesign.classList.remove('hidden');
+      this.inputInfo.textContent = ''; // Clear info
+
+      // Update Labels
+      if (this.step2Label) this.step2Label.textContent = 'Design Image';
+      if (this.step2Desc) this.step2Desc.textContent = 'Select the single design image file.';
+
+      // Hide Step 4 (Redundant) in Single Mode
+      if (this.step4Container) this.step4Container.classList.add('hidden');
+    }
+
+    // CRITICAL FIX: Reset all input states when switching modes
+    this.inputFolder = null;
+    this.designFiles = [];
+    this.inputInfo.textContent = ''; // Clear visual text
+
+    // Reset Output Folder (since it depends on input context)
+    this.outputFolder = null;
+    if (this.outputInfo) this.outputInfo.textContent = '';
+
+    // Reset Canvas & Mockup Design Data
+    this.sampleDesignData = null;
+    this.pendingDesignUrl = null;
+
+    // Clear the rendering container
+    if (this.designContainer) {
+      this.designContainer.removeChildren();
+    }
+    this.designSprite = null;
+
+    // Reset Selection/Guides
+    if (this.handleGraphics) this.handleGraphics.clear();
+    if (this.guideGraphics) this.guideGraphics.clear();
+    this.isSelected = false;
+
+    // Reset Sample Design Area Text (UI)
+    if (this.sampleDesignArea) {
+      this.sampleDesignArea.innerHTML = '<p>Drag a design here or click to select</p>';
+      this.sampleDesignArea.style.borderColor = '';
+    }
+
+    // Update button state (will disable it until new input is selected)
+    this.updateGenerateButton();
+  }
+
+  async selectSingleDesignInput() {
+    // Re-use selectSampleDesignFile or check preload for general file selector
+    // Actually checking preload... ensure we have general selector
+    // preload has selectSampleDesignFile (images). We can use that.
+    const result = await window.electronAPI.selectSampleDesignFile(); // Returns base64 string usually? NO wait
+    // selectSampleDesignFile in main.js returns data string? 
+    // Wait, we need the PATH. 
+    // selectMockupFile returns object {path, variable...}
+    // Let's check selectMockupFile logic in main.js.
+    // selectSampleDesignFile returns `data:image...` string. That is NOT what we want for batch processing.
+    // We need the PATH.
+
+    // We need a NEW API: selectSingleFile (returns path)
+    // OR we reuse electMockupFile but it returns data object {path, name, data}.
+
+    // Let's check main.js again or assume we need to add it. 
+    // Actually, let's use selectMockupFile for now as it gives us the path and name, which is what we need.
+    const resultObj = await window.electronAPI.selectMockupFile();
+    if (resultObj && resultObj.path) {
+      this.inputFolder = null; // No folder
+      this.designFiles = [resultObj.path]; // Array with 1 file
+      this.inputInfo.textContent = "1 file selected: " + resultObj.name;
+
+      // Allow Manual Output Folder or Auto
+      if (!this.outputFolder) {
+        try {
+          const sep = window.electronAPI.isWindows ? '\\' : '/';
+          const parentDir = resultObj.path.substring(0, resultObj.path.lastIndexOf(sep));
+          const processedPath = await window.electronAPI.pathJoin(parentDir, 'processed');
+          this.outputFolder = processedPath;
+          this.outputInfo.textContent = 'Auto: processed';
+        } catch (e) {
+          console.error("Auto output failed", e);
+        }
+      }
+
+      // AUTO-LOAD to Canvas (Preview)
+      if (resultObj.data) {
+        this.loadDesignToCanvas(resultObj.data);
+      }
+      this.updateGenerateButton();
+    }
+  }
+
   async loadMockup() {
     const result = await window.electronAPI.selectMockupFile();
     if (result) {
+      // FIX: Clear any previous batch queue from Library
+      this.mockupQueue = [];
+
       this.mockupData = result;
       this.mockupInfo.textContent = result.name;
       this.initPixiApp();
@@ -547,6 +795,13 @@ class RapidMockStudio {
       this.inputFolder = result.path;
       this.designFiles = result.files;
       this.inputInfo.textContent = `${result.files.length} files in ${result.path.split(/[\\/]/).pop()}`;
+
+      // Auto-set Output Folder
+      const processedPath = await window.electronAPI.pathJoin(this.inputFolder, 'processed');
+      this.outputFolder = processedPath;
+      this.outputInfo.textContent = 'Auto: ' + processedPath.split(/[\\/]/).pop(); // e.g. "processed"
+      this.outputInfo.title = processedPath;
+
       this.updateGenerateButton();
     }
   }
@@ -570,6 +825,9 @@ class RapidMockStudio {
   }
 
   async loadSampleDesignFromFile(file) {
+    // Store original path for protection logic in export
+    this.sampleDesignPath = file.path ? file.path.replace(/\\/g, '/') : null;
+
     // Check if it's a file object (from drag drop)
     if (file.path) {
       const designData = await window.electronAPI.loadDesignFile(file.path);
@@ -595,16 +853,41 @@ class RapidMockStudio {
   }
 
   updateGenerateButton() {
-    const canGenerate = this.mockupData &&
-      this.designFiles.length > 0 &&
-      this.outputFolder &&
-      this.sampleDesignData;
-    this.btnGenerate.disabled = !canGenerate;
+    // Robust check for both Single and Batch modes
+    const hasMockup = !!this.mockupData;
 
-    if (this.designFiles.length > 0) {
-      this.fileCount.textContent = `${this.designFiles.length} files ready to process`;
+    // In Single mode, 'inputFolder' is null, but 'designFiles' has 1 item.
+    // In Batch mode, 'inputFolder' is set AND 'designFiles' has items.
+    const hasInput = (this.designFiles && this.designFiles.length > 0);
+
+    const hasOutput = !!this.outputFolder;
+
+    // We don't strictly need sampleDesignData for generation if we have files.
+    // However, for positioning, users *should* have loaded a design.
+    // In Single Mode, the design IS the sample, so it's fine.
+
+    if (hasMockup && hasInput && hasOutput) {
+      this.btnGenerate.disabled = false;
+      this.btnGenerate.classList.remove('disabled');
+      this.btnGenerate.innerHTML = `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Generate All Files`;
+
+      const count = this.designFiles.length;
+      // Update the hint text if it exists (it's the next sibling in HTML structure usually, or we find it)
+      // The original code used 'this.fileCount'
+      if (this.fileCount) {
+        this.fileCount.textContent = `${count} files ready to process`;
+        this.fileCount.style.opacity = '1';
+      }
     } else {
-      this.fileCount.textContent = '';
+      this.btnGenerate.disabled = true;
+      this.btnGenerate.classList.add('disabled');
+      // Keep icon to prevent layout shift
+      this.btnGenerate.innerHTML = `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Generate All Files`;
+
+      if (this.fileCount) {
+        this.fileCount.textContent = 'Select input/output to continue';
+        this.fileCount.style.opacity = '0.7';
+      }
     }
   }
 
@@ -696,8 +979,8 @@ class RapidMockStudio {
     // FIX: Apply a HEAVY blur to create a "Volume Map" rather than a "Texture Map"
     // "Enterprise Level" technique: Isolate large forms (folds) and kill all micro-texture.
     const blurFilter = new PIXI.filters.BlurFilter();
-    blurFilter.quality = 15; // Max quality kernel
-    blurFilter.blur = 35; // Significant blur (approx 1-2% of 4k res) to completely eliminate particulation
+    blurFilter.quality = 10; // High quality kernel
+    blurFilter.blur = 20; // Reduced from 35 to 20 for "Sharper Folds" (High Definition)
 
     // Combine: Grayscale -> Heavy Blur (Smooth Gradients Only)
     this.displacementSprite.filters = [grayFilter, blurFilter];
@@ -725,13 +1008,12 @@ class RapidMockStudio {
     // FIX: Removed unsafe check for PIXI.features which caused crash. Using standard PIXI.filters location.
     const shadowMatrix = new PIXI.filters.ColorMatrixFilter();
     shadowMatrix.desaturate();
-    // "Opaque Ink" Tuning v2: "Super Bleach"
-    // We boost brightness EXTREMEMLY high so that 95% of the shirt is Pure White.
-    // Pure White in Multiply mode = Transparent. This kills the "Grey Overlay" effect.
-    shadowMatrix.contrast(4, false);
-    shadowMatrix.brightness(2.5, false); // Massive brightness boost
+    // "Opaque Ink" Tuning v2.1: Adjusted for consistency
+    // We boost brightness HIGH to ensure whites are pure (Transparent in Multiply)
+    shadowMatrix.contrast(3, false); // Reduced from 4 to prevent crushing mids
+    shadowMatrix.brightness(3.0, false); // Increased from 2.5 to washout greys
     this.shadowLayer.filters = [shadowMatrix];
-    this.shadowLayer.alpha = 1.0; // Max alpha, since only deep folds remain
+    this.shadowLayer.alpha = 0.85; // Capped at 85% to prevent "Blackish Overlay"
 
     // 2. Texture Map (Hard Light): Re-introduces the fabric grain we blurred out.
     // This is the "Secret Sauce" for extreme realism.
@@ -806,8 +1088,8 @@ class RapidMockStudio {
 
     const designTexture = PIXI.Texture.from(dataUrl);
 
-    // Use SimplePlane for Mesh Warping (10x10 Grid for high fidelity)
-    this.designSprite = new PIXI.SimplePlane(designTexture, 10, 10);
+    // Use SimplePlane for Mesh Warping (40x40 Grid for ULTRA high fidelity)
+    this.designSprite = new PIXI.SimplePlane(designTexture, 40, 40);
 
     // FIX: Ensure interactions work even after switching mockups
     this.designSprite.eventMode = 'static';
@@ -1232,6 +1514,11 @@ class RapidMockStudio {
               rotateStartAngle: this.designRotation
             };
           } else {
+            // Calculate scale to fit canvas with padding
+            const currentInitialScale = Math.min(
+              (this.app.screen.width * 0.8) / this.designSprite.width,
+              (this.app.screen.height * 0.8) / this.designSprite.height
+            );
             this.interactionState = {
               mode: 'drag',
               start: { x, y },
@@ -1365,7 +1652,7 @@ class RapidMockStudio {
         let newScale = this.interactionState.initialParam * scaleFactor;
         newScale = Math.max(10, Math.min(200, newScale));
 
-        // Sync Slider
+        this.designSprite.scale.set(newScale / 100);
         this.settings.scale = Math.round(newScale);
         this.sliderScale.value = this.settings.scale;
         this.scaleValue.textContent = `${this.settings.scale}%`;
@@ -1454,57 +1741,124 @@ class RapidMockStudio {
 
         // Load Mockup Data
         let currentMockupData = null;
-        if (mockup.data) {
+        // Check if we have a path to construct a clean file:// URL
+        // We prefer this over 'data' which might be 'safe-file://' (good for UI, maybe bad for Pixi export?)
+        if (mockup.path) {
+          const safePath = mockup.path.replace(/\\/g, '/');
+          currentMockupData = `file://${safePath}`;
+        } else if (mockup.data) {
           currentMockupData = mockup.data;
         } else {
-          // We need to read the file
-          // We can use the helper or just construct file://
-          // Since we need to pass it to PIXI, file:// is fine for renderer
-          currentMockupData = `file://${mockup.path.replace(/\\/g, '/')}`;
+          console.error("Mockup has no path or data:", mockup);
+          continue;
         }
+
+        console.log("Generating Mockup using URL:", currentMockupData);
 
         // Setup Export Stage with this Mockup
         // We reuse logic from setupLayers but for exportApp
-        const protectedTexture = await this.setupExportStage(exportApp, currentMockupData);
+        // Calculate Warp Scale Ratio
+        // Preview is roughly 800px wide (canvas width).
+        // If export is 4000px, warp must be 5x stronger to look the same.
+        // We use this.app.renderer.width as the reference (preview size).
+        let previewWidth = 800;
+        if (this.app && this.app.renderer) {
+          previewWidth = this.app.renderer.width;
+        }
+        let exportWidth = this.originalWidth;
+
+        // Use currentMockupData to fetch texture dimensions if possible?
+        // We do this inside the loop later, but setupExportStage needs it NOW.
+        // Actually, we can get it from the loaded texture inside setupExportStage
+        // But we need the RATIO.
+        // Let's pass the previewWidth to setupExportStage and let it calc.
+        // Or better: Just approximation:
+        // We don't know the exact export width until the texture loads in setupExportStage.
+        // So we can compute it AFTER loading?
+        // No, buildLayers is called immediately.
+
+        // Fix: We'll modify setupExportStage to calc ratio internally once texture loads.
+        // We pass the previewWidth reference.
+
+        const protectedTexture = await this.setupExportStage(exportApp, currentMockupData, previewWidth);
         if (!protectedTexture) {
           console.error(`Failed to setup stage for mockup: ${mockup.name}`);
           continue; // Skip this mockup if texture failed
         }
 
         for (const designFile of this.designFiles) {
+          // Normalize designFile (it might be a string path or an object)
+          const designPath = (typeof designFile === 'string') ? designFile : designFile.path;
+          const designNameRaw = (typeof designFile === 'string') ? designFile.split(/[\\/]/).pop() : designFile.name;
+
           // Update progress
           processed++;
           this.progressText.textContent = `Processing ${processed} / ${totalOperations} (Mockup: ${mockup.name})`;
           this.progressFill.style.width = `${(processed / totalOperations) * 100}%`;
 
           // Load design
-          const designData = await window.electronAPI.loadDesignFile(designFile.path);
+          const designData = await window.electronAPI.loadDesignFile(designPath);
           if (!designData) {
-            console.error(`Failed to load: ${designFile.name}`);
+            console.error(`Failed to load: ${designNameRaw}`);
             continue;
+          }
+
+          // Mockup Size Check
+          // The exportApp was initialized with this.originalWidth/Height of the FIRST mockup or currently loaded one.
+          // If the queued mockup has different dimensions, we MUST resize the renderer.
+          // We can check the dimensions from the loaded texture in setupExportStage -> protectedTexture.
+          if (protectedTexture && protectedTexture.baseTexture.valid) {
+            const texW = protectedTexture.baseTexture.width;
+            const texH = protectedTexture.baseTexture.height;
+
+            // Always update global reference dimensions for design sizing logic
+            this.originalWidth = texW;
+            this.originalHeight = texH;
+          }
+
+          // Enforce linear scaling for design texture to prevent pixelation
+          // We do this before creating sprite
+          // Note: designData is a string (URI) so PIXI.Texture.from creates a new texture or pulls from cache
+          // We can't easily access the internal texture before this point, but we can configure it now.
+          const designTex = PIXI.Texture.from(designData);
+          if (designTex.baseTexture) {
+            designTex.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+            designTex.baseTexture.mipmap = PIXI.MIPMAP_MODES.ON;
           }
 
           // Render at full resolution
           await this.renderExport(exportApp, designData);
 
           // Extract and save
-          let base64 = await exportApp.renderer.extract.base64(exportApp.stage, 'image/jpeg', 0.95);
+          // Extract as PNG (Lossless) to avoid double-compression artifacts
+          let base64 = await exportApp.renderer.extract.base64(exportApp.stage, 'image/png');
 
           // Resize if Preset is active
+          // FIX: Pass exportFormat to ensure transparency/filetype is handled correctly
           if (this.settings.exportPreset !== 'original') {
-            base64 = await this.resizeImage(base64, this.settings.exportPreset, this.settings.customExportWidth);
+            base64 = await this.resizeImage(base64, this.settings.exportPreset, this.settings.customExportWidth, this.settings.exportFormat);
+          } else {
+            // FIX: Even for 'original', we must respect the chosen format (PNG/WebP/JPG)
+            base64 = await this.resizeImage(base64, 'original', null, this.settings.exportFormat);
           }
 
-          // Generate output filename -> {DesignName}_{MockupName}.jpg
+          // Generate output filename -> {DesignName}_{MockupName}.extension
           // Sanitize mockup name
           const mockupName = mockup.name.replace(/\.(png|jpg|jpeg)$/i, '');
-          const designName = designFile.name.replace(/\.(png|jpg|jpeg)$/i, '');
-          const outputFilename = `${designName}_${mockupName}.jpg`;
+          const designName = designNameRaw.replace(/\.(png|jpg|jpeg)$/i, '');
+
+          let ext = 'jpg';
+          if (this.settings.exportFormat === 'png') ext = 'png';
+          if (this.settings.exportFormat === 'webp') ext = 'webp';
+
+          const outputFilename = `${designName}_${mockupName}.${ext}`;
+
+          // Construct full output path manually since main expecting filePath
+          const fullOutputPath = await window.electronAPI.pathJoin(this.outputFolder, outputFilename);
 
           await window.electronAPI.saveRenderedImage({
-            base64Data: base64,
-            outputPath: this.outputFolder,
-            filename: outputFilename
+            filePath: fullOutputPath,
+            dataBase64: base64
           });
 
           // Clear textures to free memory
@@ -1537,7 +1891,7 @@ class RapidMockStudio {
       console.error('Generation error:', error);
       this.progressText.textContent = `Error: ${error.message}`;
     } finally {
-      exportApp.destroy(true, { children: true, texture: true, baseTexture: true });
+      exportApp.destroy(true, { children: true, texture: false, baseTexture: false });
 
       this.isProcessing = false;
       this.btnGenerate.disabled = false;
@@ -1551,20 +1905,31 @@ class RapidMockStudio {
   }
 
   // Helper to setup the export stage with a specific mockup
-  async setupExportStage(app, mockupUrl) {
+  async setupExportStage(app, mockupUrl, previewWidth = 800) {
     // Clear stage
     app.stage.removeChildren();
 
     return new Promise((resolve) => {
       const texture = PIXI.Texture.from(mockupUrl);
-      if (texture.baseTexture.valid) {
-        this._buildLayers(app, texture);
+      const onTextureLoad = () => {
+        if (!texture || !texture.baseTexture) {
+          console.error("SetupExportStage: Invalid texture loaded");
+          resolve(null);
+          return;
+        }
+        const texW = texture.baseTexture.width;
+        // REVERT: Smart Warp Scaling was causing excessive distortion/blur on high-res textures.
+        // We force ratio to 1.0 to match the "Before" behavior (Sharp but subtle warp).
+        const ratio = 1.0;
+        // Pass ratio as warpScale
+        this._buildLayers(app, texture, ratio);
         resolve(texture);
+      };
+
+      if (texture.baseTexture.valid) {
+        onTextureLoad();
       } else {
-        texture.baseTexture.on('loaded', () => {
-          this._buildLayers(app, texture);
-          resolve(texture);
-        });
+        texture.baseTexture.on('loaded', onTextureLoad);
         texture.baseTexture.on('error', () => {
           console.error("Failed to load export mockup texture");
           resolve(null);
@@ -1574,30 +1939,51 @@ class RapidMockStudio {
   }
 
   _buildLayers(app, mockupTexture) {
-    if (!mockupTexture) return; // Guard
+    if (!mockupTexture || !mockupTexture.valid) { // Check validity
+      console.error("Invalid texture passed to _buildLayers");
+      return;
+    }
 
     // Replicate setupLayers logic but for the export app instance
     // 1. Background
     const bg = new PIXI.Sprite(mockupTexture);
     bg.width = app.screen.width;
     bg.height = app.screen.height;
+
+    // Apply Persisted Mockup Tint (Fix for Universal Mockups)
+    if (this.settings.mockupColor) {
+      bg.tint = this.settings.mockupColor;
+    }
+
     app.stage.addChild(bg);
 
     // 2. Displacement
     const dispSprite = new PIXI.Sprite(mockupTexture);
     dispSprite.width = app.screen.width;
     dispSprite.height = app.screen.height;
+
+    // We want to blur this map to reduce noise, but manual rendering caused crashes.
+    // Alternative: Just use the sprite as is. The high warpScale + mismatch caused noise.
+    // We will just leave it raw for now to Restore Stability.
+
+    dispSprite.renderable = false;
+
+    // FIX: Apply same filters as Editor to create proper Volume Map
     const grayFilter = new PIXI.ColorMatrixFilter();
     grayFilter.desaturate();
+
+    // Blur to remove noise (20px High Def)
     const blurFilter = new PIXI.filters.BlurFilter();
-    blurFilter.quality = 15;
-    blurFilter.blur = 35;
+    blurFilter.quality = 10;
+    blurFilter.blur = 20;
+
     dispSprite.filters = [grayFilter, blurFilter];
-    dispSprite.renderable = false;
+
     app.stage.addChild(dispSprite);
 
     const dispFilter = new PIXI.DisplacementFilter(dispSprite);
-    dispFilter.resolution = 2;
+
+    dispFilter.resolution = 2; // Restore high quality displacement resolution
     dispFilter.scale.x = this.settings.warpStrength;
     dispFilter.scale.y = this.settings.warpStrength;
 
@@ -1612,24 +1998,42 @@ class RapidMockStudio {
     shadow.width = app.screen.width;
     shadow.height = app.screen.height;
     shadow.blendMode = PIXI.BLEND_MODES.MULTIPLY;
+
+    // FIX: Match Editor Realism (v2.1)
+    // "Opaque Ink" Tuning v2.1: Adjusted for consistency
     const shadowMatrix = new PIXI.filters.ColorMatrixFilter();
     shadowMatrix.desaturate();
-    shadowMatrix.contrast(4, false);
-    shadowMatrix.brightness(2.5, false);
+    shadowMatrix.contrast(3, false); // Reduced from 4 to prevent crushing mids
+    shadowMatrix.brightness(3.0, false); // Increased from 2.5 to washout greys
     shadow.filters = [shadowMatrix];
-    shadow.alpha = 0.35 * (this.settings.textureStrength / 100);
+    shadow.alpha = 0.35 * (this.settings.textureStrength / 100); // FIX: Matched to base value 0.35
     if (this.settings.showOverlay) app.stage.addChild(shadow);
+
+    // Texture Layer (Hard Light)
+    const texture = new PIXI.Sprite(mockupTexture);
+    texture.width = app.screen.width;
+    texture.height = app.screen.height;
+    texture.blendMode = PIXI.BLEND_MODES.HARD_LIGHT;
+
+    // Texture Tuning: High Pass effect simulation
+    const textureMatrix = new PIXI.filters.ColorMatrixFilter();
+    textureMatrix.desaturate();
+    textureMatrix.contrast(2, false); // Extreme contrast to isolate grain
+    texture.filters = [textureMatrix];
+    texture.alpha = 0.15 * (this.settings.textureStrength / 100); // FIX: Matched to base value 0.15
+    if (this.settings.showOverlay) app.stage.addChild(texture);
 
     // Highlight
     const highlight = new PIXI.Sprite(mockupTexture);
     highlight.width = app.screen.width;
     highlight.height = app.screen.height;
     highlight.blendMode = PIXI.BLEND_MODES.SCREEN;
+
     const highlightMatrix = new PIXI.filters.ColorMatrixFilter();
     highlightMatrix.contrast(2, false);
     highlightMatrix.brightness(0.6, false);
     highlight.filters = [highlightMatrix];
-    highlight.alpha = 0.4 * (this.settings.textureStrength / 100);
+    highlight.alpha = 0.4 * (this.settings.textureStrength / 100); // Correct (Matches 0.4)
     if (this.settings.showOverlay) app.stage.addChild(highlight);
   }
 
@@ -1646,6 +2050,10 @@ class RapidMockStudio {
     designContainer.removeChildren();
 
     const designTexture = PIXI.Texture.from(designData);
+    // Attach source path for protection logic
+    if (typeof designData === 'string') {
+      designTexture._sourcePath = designData.replace(/\\/g, '/');
+    }
 
     // Wait for texture to load
     if (!designTexture.baseTexture.valid) {
@@ -1662,7 +2070,8 @@ class RapidMockStudio {
     }
 
     // Create Design Sprite (SimplePlane)
-    const designSprite = new PIXI.SimplePlane(designTexture, 10, 10);
+    // Create Design Sprite (SimplePlane) (40x40 for ULTRA fidelity)
+    const designSprite = new PIXI.SimplePlane(designTexture, 40, 40);
 
     // Apply same transforms at full resolution
     // Pivot for centering
@@ -1691,7 +2100,7 @@ class RapidMockStudio {
     // currentWidth = baseDesignWidth * designScale
 
     // So for export:
-    const baseWidthExport = this.originalWidth * 0.3;
+    const baseWidthExport = this.originalWidth * 0.4;
     const aspectRatio = designTexture.width / designTexture.height;
 
     designSprite.width = baseWidthExport * this.designScale;
@@ -1724,35 +2133,31 @@ class RapidMockStudio {
 
 
   clearExportTextures(exportApp, protectedTexture) {
-    const stage = exportApp.stage;
-    // We want to keep the BASE mockup texture (which is shared by BG, shadow, highlight)
-    // but destroy unique design textures.
-    const baseMockupTexture = protectedTexture ? protectedTexture.baseTexture : null;
+    // Safer Cleanup: Only destroy textures inside the Design Container
+    const designContainer = exportApp.stage.children.find(c => c instanceof PIXI.Container && c.filters && c.filters.some(f => f instanceof PIXI.DisplacementFilter));
 
-    const destroyRecursive = (container) => {
-      container.children.forEach(child => {
-        if (child instanceof PIXI.Sprite || child instanceof PIXI.SimplePlane) {
-          if (child.texture) {
-            const childBase = child.texture.baseTexture;
-            // If this texture is NOT the shared mockup texture, nuke it.
-            if (baseMockupTexture && childBase !== baseMockupTexture) {
-              child.texture.destroy(true); // Destroy texture + baseTexture
-            }
+    if (designContainer) {
+      designContainer.children.forEach(child => {
+        if (child.texture) {
+          // PROTECTION: Check if this texture is currently used by the Main Editor
+          const isShared = this.designSprite && this.designSprite.texture &&
+            this.designSprite.texture.baseTexture === child.texture.baseTexture;
+
+          if (!isShared) {
+            child.texture.destroy(true); // Only destroy if NOT shared
           }
         }
-
-        if (child.children && child.children.length > 0) {
-          destroyRecursive(child);
-        }
       });
-    };
+      designContainer.removeChildren();
+    }
 
-    destroyRecursive(stage);
+    // Do NOT touch other stage children (Background, Shadow, etc)
+    // This prevents accidentally destroying the shared Editor mockup texture.
   }
 
   // --- LIBRARY METHODS ---
 
-  async resizeImage(base64, preset, customWidth) {
+  async resizeImage(base64, preset, customWidth, format = 'jpg') {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
@@ -1771,9 +2176,14 @@ class RapidMockStudio {
         } else if (preset === 'custom') {
           targetWidth = customWidth;
           targetHeight = targetWidth / aspect;
+        } else if (preset === 'original') {
+          // Pass-through for Quality Conversion (PNG -> JPEG 0.98)
+          targetWidth = img.width;
+          targetHeight = img.height;
         } else {
-          resolve(base64); // Original
-          return;
+          // Fallback
+          targetWidth = img.width;
+          targetHeight = img.height;
         }
 
         const canvas = document.createElement('canvas');
@@ -1785,8 +2195,13 @@ class RapidMockStudio {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
 
+        // FIX: Ensure background is WHITE for JPEG export (handles transparency)
+        // Otherwise transparent pixels turn BLACK in JPEG
+        // ctx.fillStyle = '#ffffff';
+        // ctx.fillRect(0, 0, targetWidth, targetHeight);
+
         if (preset === 'shopify') {
-          // Fill white background
+          // Fill white background (redundant but safe)
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, targetWidth, targetHeight);
 
@@ -1808,10 +2223,24 @@ class RapidMockStudio {
 
         } else {
           // Normal resize
+          // FIX: Ensure background is WHITE for JPEG export ONLY
+          if (format === 'jpg') {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, targetWidth, targetHeight);
+          }
+          // For PNG/WebP, we want TRANSPARENCY, so NO fillRect (Canvas is transparent by default)
+
           ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
         }
 
-        resolve(canvas.toDataURL('image/jpeg', 0.95));
+        // Output Format
+        let mimeType = 'image/jpeg';
+        if (format === 'png') mimeType = 'image/png';
+        if (format === 'webp') mimeType = 'image/webp';
+
+        // Output Quality
+        // JPG/WebP use quality. PNG ignores it.
+        resolve(canvas.toDataURL(mimeType, 0.98));
       };
 
       img.src = base64;
@@ -1830,8 +2259,8 @@ class RapidMockStudio {
 
   async loadLibraryData() {
     try {
-      const categories = await window.electronAPI.scanLibrary();
-      this.libraryData = categories;
+      const response = await window.electronAPI.scanLibrary();
+      this.libraryData = response.structure || {};
       this.renderLibraryCategories();
       // Fix: Pass array + name
       this.renderLibraryGrid(this.libraryData['T-Shirts'] || [], 'T-Shirts');
@@ -1926,26 +2355,51 @@ class RapidMockStudio {
   renderLibraryGrid(items, categoryName) {
     this.libraryGrid.innerHTML = '';
 
-    if (!items || items.length === 0) {
-      // If empty, show only the "Add Mockup" card
-    }
+    // If items exist, render them. If not, we still want the "Add" button below.
+    if (items && Array.isArray(items) && items.length > 0) {
+      items.forEach(file => {
+        const el = document.createElement('div');
+        el.className = 'library-item';
+        if (this.selectedLibraryItems.has(file.path)) {
+          el.classList.add('selected');
+        }
 
-    items.forEach(file => {
-      const el = document.createElement('div');
-      el.className = 'library-item';
-      if (this.selectedLibraryItems.has(file.path)) {
-        el.classList.add('selected');
-      }
+        // Encode path for src
+        const safePath = file.path.replace(/\\/g, '/');
+        const imgSrc = file.data ? file.data : `safe-file://${safePath}`;
 
-      el.innerHTML = `<img src="${file.data ? file.data : 'file://' + file.path.replace(/\\/g, '/')}" loading="lazy">`;
+        el.innerHTML = `
+          <img src="${imgSrc}" loading="lazy">
+          <div class="library-item-delete" title="Delete Mockup">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          </div>
+        `;
 
-      // Click Handler: Toggle Selection
-      el.addEventListener('click', () => {
-        this.toggleLibrarySelection(file, el);
+        // Click Handler: Toggle Selection
+        el.addEventListener('click', (e) => {
+          // Prevent selection if clicking delete
+          if (e.target.closest('.library-item-delete')) return;
+          this.toggleLibrarySelection(file, el);
+        });
+
+        // Delete Handler
+        const deleteBtn = el.querySelector('.library-item-delete');
+        deleteBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (confirm(`Are you sure you want to delete "${file.name}"?`)) {
+            const success = await window.electronAPI.deleteLibraryMockup(file.path);
+            if (success) {
+              this.selectedLibraryItems.delete(file.path);
+              this.openLibrary();
+            } else {
+              alert("Failed to delete file.");
+            }
+          }
+        });
+
+        this.libraryGrid.appendChild(el);
       });
-
-      this.libraryGrid.appendChild(el);
-    });
+    }
 
     // Add "New Mockup" card at the end
     const addCard = document.createElement('div');
@@ -2051,7 +2505,7 @@ class RapidMockStudio {
     this.mockupData = {
       name: firstMockup.name,
       path: firstMockup.path,
-      data: `file://${safePath}`
+      data: `safe-file://${firstMockup.path}`
     };
 
     this.mockupInfo.textContent = this.selectedLibraryItems.size > 1
