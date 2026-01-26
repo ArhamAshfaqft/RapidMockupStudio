@@ -1,0 +1,8 @@
+version: 1.0.0
+files:
+  - url: RMS-Setup-1.0.0.exe
+    sha512: 9vISMZ2mQzw1xHI50DCC+fAl64coyySsr0e70PB7FFAxCIGpVMJ1IDCBh7DIFu/uDso32lsTsxO4t+SbR8li+A==
+    size: 189697510
+path: RMS-Setup-1.0.0.exe
+sha512: 9vISMZ2mQzw1xHI50DCC+fAl64coyySsr0e70PB7FFAxCIGpVMJ1IDCBh7DIFu/uDso32lsTsxO4t+SbR8li+A==
+releaseDate: '2026-01-26T09:49:33.320Z'
