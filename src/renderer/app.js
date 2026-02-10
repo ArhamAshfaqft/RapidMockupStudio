@@ -93,6 +93,11 @@ class RapidMockStudio {
     if (this.customWidthInput) {
       this.customWidthInput.value = this.settings.customExportWidth;
     }
+    if (this.exportFormatSelect) {
+      // Default to jpg if undefined
+      if (!this.settings.exportFormat) this.settings.exportFormat = 'jpg';
+      this.exportFormatSelect.value = this.settings.exportFormat;
+    }
 
     // Update visibility using the new helper
     this.toggleCustomWidth();
