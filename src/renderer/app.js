@@ -520,6 +520,12 @@ class RapidMockStudio {
     // 3. Output Folder Drop
     setupDropZone(this.btnSelectOutput.parentElement, (files) => this.handleOutputFolderDrop(files));
 
+    // 4. Canvas Wrapper Drop (Treat as Design Input)
+    // This allows dropping design files directly onto the shirt/canvas
+    if (this.canvasWrapper) {
+      setupDropZone(this.canvasWrapper, (files) => this.handleInputFolderDrop(files));
+    }
+
     // Bind Crop Button
     this.btnCrop = document.getElementById('btn-crop');
     if (this.btnCrop) {
@@ -579,7 +585,7 @@ class RapidMockStudio {
     // If it's a file path check via IPC (for robust validation)
     if (file.path) {
       const info = await window.electronAPI.getDroppedFilePath(file.path);
-      if (info && info.isFile && /\.(png|jpg|jpeg)$/i.test(info.name)) {
+      if (info && info.isFile && /\.(png|jpe?g|webp|avif)$/i.test(info.name)) {
         // It's a valid image, load it using standard flow (we need to read file content)
         // We can reuse selectMockupFile logic but we need to bypass dialog
         // Actually, simplest is to read it here or reload via IPC
@@ -640,7 +646,7 @@ class RapidMockStudio {
             this.updateGenerateButton();
           }
         }
-      } else if (info && info.isFile && /\.(png|jpe?g)$/i.test(info.name)) {
+      } else if (info && info.isFile && /\.(png|jpe?g|webp|avif)$/i.test(info.name)) {
         // SINGLE FILE DROPPED
 
         // Force Single Mode

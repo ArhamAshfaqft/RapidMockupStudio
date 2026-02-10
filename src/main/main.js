@@ -147,7 +147,7 @@ ipcMain.handle('quit-and-install', () => {
 ipcMain.handle('select-mockup-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
-    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }]
+    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'avif'] }]
   });
   if (!result.canceled && result.filePaths.length > 0) {
     const filePath = result.filePaths[0];
@@ -166,7 +166,7 @@ ipcMain.handle('select-mockup-file', async () => {
 ipcMain.handle('select-sample-design-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
-    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }]
+    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'avif'] }]
   });
   if (!result.canceled && result.filePaths.length > 0) {
     const filePath = result.filePaths[0];
@@ -196,7 +196,7 @@ ipcMain.handle('scan-folder', async (event, folderPath) => {
   try {
     const files = fs.readdirSync(folderPath);
     const imageFiles = files
-      .filter(file => /\.(png|jpe?g)$/i.test(file))
+      .filter(file => /\.(png|jpe?g|webp|avif)$/i.test(file))
       .map(file => path.join(folderPath, file));
     return { path: folderPath, files: imageFiles };
   } catch (err) {
