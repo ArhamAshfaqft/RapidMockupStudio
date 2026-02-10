@@ -427,6 +427,50 @@ class RapidMockStudio {
         this.updateDesignTransform();
       }
     });
+
+    // Patch Notes Logic
+    this.btnViewPatchNotes = document.getElementById('btn-view-patch-notes');
+    this.patchNotesModal = document.getElementById('patch-notes-modal');
+    this.btnClosePatchNotes = document.getElementById('btn-close-patch-notes');
+    this.btnAckPatchNotes = document.getElementById('btn-ack-patch-notes');
+
+    if (this.btnViewPatchNotes) {
+      this.btnViewPatchNotes.addEventListener('click', () => {
+        this.patchNotesModal.style.display = 'flex';
+      });
+    }
+
+    if (this.btnClosePatchNotes) {
+      this.btnClosePatchNotes.addEventListener('click', () => {
+        this.patchNotesModal.style.display = 'none';
+      });
+    }
+
+    if (this.btnAckPatchNotes) {
+      this.btnAckPatchNotes.addEventListener('click', () => {
+        this.patchNotesModal.style.display = 'none';
+        // Also save that they've seen it (redundant but safe)
+        const currentVersion = '1.0.1';
+        localStorage.setItem('lastViewedPatchNotes', currentVersion);
+      });
+    }
+
+    // Auto-Show Patch Notes on First Load
+    this.checkPatchNotes();
+  }
+
+  checkPatchNotes() {
+    const currentVersion = '1.0.1'; // HARDCODED for this release
+    const lastViewed = localStorage.getItem('lastViewedPatchNotes');
+
+    if (lastViewed !== currentVersion) {
+      // New version detected! Show notes.
+      if (this.patchNotesModal) {
+        this.patchNotesModal.style.display = 'flex';
+      }
+      // Update storage immediately so it doesn't show again
+      localStorage.setItem('lastViewedPatchNotes', currentVersion);
+    }
   }
 
   setupPresetListeners() {
@@ -606,6 +650,7 @@ class RapidMockStudio {
             data: e.target.result
           };
           this.mockupInfo.textContent = info.name;
+          this.resetMockupSettings(); // Reset Tint
           this.initPixiApp();
         };
         reader.readAsDataURL(file);
@@ -829,6 +874,8 @@ class RapidMockStudio {
     if (result) {
       // FIX: Clear any previous batch queue from Library
       this.mockupQueue = [];
+
+      this.resetMockupSettings(); // Reset Tint
 
       this.mockupData = result;
       this.mockupInfo.textContent = result.name;
@@ -1260,7 +1307,9 @@ class RapidMockStudio {
 
   updateMockupColor() {
     if (this.background) {
-      this.background.tint = this.settings.mockupColor;
+      // Safety: If null/undefined, force white
+      const color = this.settings.mockupColor || '#ffffff';
+      this.background.tint = color;
     }
   }
 
@@ -2559,10 +2608,39 @@ class RapidMockStudio {
       ? `${firstMockup.name} (+${this.selectedLibraryItems.size - 1} others)`
       : firstMockup.name;
 
+    this.resetMockupSettings(); // FIX: Reset Tint in "Use" flow too!
+
     this.initPixiApp();
     this.closeLibrary();
     this.updateGenerateButton(); // Important to update label
   }
+
+  resetMockupSettings() {
+    // FIX: Reset Tint Settings to avoid "Black Overlay" from previous states
+    this.settings.mockupColor = '#ffffff';
+    if (this.checkboxEnableTint) {
+      this.checkboxEnableTint.checked = false;
+      this.checkboxEnableTint.dispatchEvent(new Event('change')); // Trigger UI update
+    }
+    if (this.tintControls) this.tintControls.style.display = 'none';
+    if (this.inputMockupColor) this.inputMockupColor.value = '#ffffff';
+  }
+
+  async loadMockup() {
+    const result = await window.electronAPI.selectMockupFile();
+    if (result) {
+      // FIX: Clear any previous batch queue from Library
+      this.mockupQueue = [];
+
+      this.resetMockupSettings(); // Reset Tint
+
+      this.mockupData = result;
+      this.mockupInfo.textContent = result.name;
+      this.initPixiApp();
+    }
+  }
+
+  // ... (handleMockupDrop modification in separate chunk) ...
 
   loadMockupFromLibrary(file) {
     // Determine path with protocol for Electron/Pixi
@@ -2576,6 +2654,8 @@ class RapidMockStudio {
       path: file.path,
       data: safeUrl
     };
+
+    this.resetMockupSettings(); // Reset Tint
 
     console.log("Loading Library Mockup:", safeUrl);
     this.mockupInfo.textContent = file.name;
