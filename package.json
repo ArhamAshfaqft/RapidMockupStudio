@@ -1,6 +1,6 @@
 {
   "name": "rapidmock-studio",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Professional Offline Mockup Generator with Realistic Fabric Warping",
   "main": "src/main/main.js",
   "scripts": {
@@ -40,7 +40,7 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "appPackageUrl": "https://github.com/ArhamAshfaqft/RapidMockupStudio/releases/download/v1.0.0/",
-      "artifactName": "RMS Web Setup ${version}.${ext}"
+      "artifactName": "RMS-Web-Setup-${version}.${ext}"
     },
     "mac": {
       "target": "dmg",
@@ -49,7 +49,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "RMS Setup ${version}.${ext}"
+      "artifactName": "RMS-Setup-${version}.${ext}"
     },
     "publish": [
       {

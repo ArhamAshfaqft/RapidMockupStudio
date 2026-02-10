@@ -1316,8 +1316,8 @@ class RapidMockStudio {
       const pivotX = this.designSprite.pivot.x;
       const pivotY = this.designSprite.pivot.y;
 
-      const scaleX = this.designSprite.width / this.designSprite.texture.width;
-      const scaleY = this.designSprite.height / this.designSprite.texture.height;
+      const scaleX = this.designSprite.scale.x;
+      const scaleY = this.designSprite.scale.y;
 
       const localToScreen = (lx, ly) => {
         const px = (lx - pivotX) * scaleX;
@@ -1361,8 +1361,8 @@ class RapidMockStudio {
       const pivotX = this.designSprite.pivot.x;
       const pivotY = this.designSprite.pivot.y;
 
-      const scaleX = this.designSprite.width / this.designSprite.texture.width;
-      const scaleY = this.designSprite.height / this.designSprite.texture.height;
+      const scaleX = this.designSprite.scale.x;
+      const scaleY = this.designSprite.scale.y;
 
       const localToScreen = (lx, ly) => {
         const px = (lx - pivotX) * scaleX;
