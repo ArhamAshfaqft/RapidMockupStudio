@@ -375,13 +375,22 @@ class RapidMockStudio {
       });
     }
 
-    // Keyboard Nudging (Canva/Figma style)
+    // Keyboard Shortcuts (Nudge, Delete)
     window.addEventListener('keydown', (e) => {
-      // Only active if a design is selected or exists
-      if (!this.designSprite || !this.originalWidth) return;
-
       // Ignore if user is typing in an input
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      // DELETE / BACKSPACE: Remove current design
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (this.designSprite || this.sampleDesignData) {
+          this.clearDesign();
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // Only active if a design is selected or exists
+      if (!this.designSprite || !this.originalWidth) return;
 
       const stepPixels = 1; // 1 pixel nudge
       const stepX = stepPixels / this.originalWidth;
@@ -672,7 +681,60 @@ class RapidMockStudio {
     }
   }
 
+  clearDesign() {
+    // 1. Remove from Pixi
+    if (this.designSprite && this.designContainer) {
+      this.designContainer.removeChild(this.designSprite);
+    }
+    this.designSprite = null;
+
+    // 2. Clear Helpers
+    this.isCropping = false;
+    this.isSelected = false;
+    if (this.handleGraphics) this.handleGraphics.clear();
+    if (this.guideGraphics) this.guideGraphics.clear();
+
+    if (this.cropMask) {
+      this.cropMask.clear();
+      this.cropMask = null;
+    }
+    this.cropRect = null;
+    this.handles = null;
+    this.cropHandles = null;
+
+    // 3. Clear Data
+    this.sampleDesignData = null;
+    this.pendingDesignUrl = null;
+
+    // 4. Clear Input File List (Crucial for Single Mode)
+    // If not in batch mode, clear the design files list so "Generate" is disabled
+    if (!this.isBatchMode) {
+      this.designFiles = [];
+      this.inputInfo.textContent = ''; // Clear file name text
+    }
+
+    // 5. Update UI (Sample Area)
+    if (this.sampleDesignArea) {
+      this.sampleDesignArea.innerHTML = '<p>Drag a design here or click to select</p>';
+      this.sampleDesignArea.style.borderColor = '';
+      this.sampleDesignArea.style.backgroundImage = '';
+    }
+
+    // 6. Update Buttons
+    this.updateGenerateButton();
+
+    // 7. Hide/Reset Crop Button UI if active
+    if (this.btnCrop) {
+      this.btnCrop.classList.remove('active');
+      this.btnCrop.style.backgroundColor = '';
+      this.btnCrop.style.color = '';
+    }
+
+    console.log('Design cleared.');
+  }
+
   toggleBatchMode(isBatch) {
+    this.isBatchMode = isBatch;
     // Show/Hide buttons based on mode
     if (isBatch) {
       this.btnSelectInput.classList.remove('hidden');
@@ -708,20 +770,9 @@ class RapidMockStudio {
     this.outputFolder = null;
     if (this.outputInfo) this.outputInfo.textContent = '';
 
-    // Reset Canvas & Mockup Design Data
-    this.sampleDesignData = null;
-    this.pendingDesignUrl = null;
+    // Clear Design
+    this.clearDesign();
 
-    // Clear the rendering container
-    if (this.designContainer) {
-      this.designContainer.removeChildren();
-    }
-    this.designSprite = null;
-
-    // Reset Selection/Guides
-    if (this.handleGraphics) this.handleGraphics.clear();
-    if (this.guideGraphics) this.guideGraphics.clear();
-    this.isSelected = false;
 
     // Reset Sample Design Area Text (UI)
     if (this.sampleDesignArea) {
@@ -734,22 +785,7 @@ class RapidMockStudio {
   }
 
   async selectSingleDesignInput() {
-    // Re-use selectSampleDesignFile or check preload for general file selector
-    // Actually checking preload... ensure we have general selector
-    // preload has selectSampleDesignFile (images). We can use that.
-    const result = await window.electronAPI.selectSampleDesignFile(); // Returns base64 string usually? NO wait
-    // selectSampleDesignFile in main.js returns data string? 
-    // Wait, we need the PATH. 
-    // selectMockupFile returns object {path, variable...}
-    // Let's check selectMockupFile logic in main.js.
-    // selectSampleDesignFile returns `data:image...` string. That is NOT what we want for batch processing.
-    // We need the PATH.
-
-    // We need a NEW API: selectSingleFile (returns path)
-    // OR we reuse electMockupFile but it returns data object {path, name, data}.
-
-    // Let's check main.js again or assume we need to add it. 
-    // Actually, let's use selectMockupFile for now as it gives us the path and name, which is what we need.
+    // We use selectMockupFile because it returns the object { path, name, data } we need
     const resultObj = await window.electronAPI.selectMockupFile();
     if (resultObj && resultObj.path) {
       this.inputFolder = null; // No folder
