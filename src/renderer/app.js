@@ -1060,7 +1060,7 @@ class RapidMockStudio {
     shadowMatrix.contrast(3, false); // Reduced from 4 to prevent crushing mids
     shadowMatrix.brightness(3.0, false); // Increased from 2.5 to washout greys
     this.shadowLayer.filters = [shadowMatrix];
-    this.shadowLayer.alpha = 0.85; // Capped at 85% to prevent "Blackish Overlay"
+    this.shadowLayer.alpha = 0; // Default to 0, let updateLighting handle it
 
     // 2. Texture Map (Hard Light): Re-introduces the fabric grain we blurred out.
     // This is the "Secret Sauce" for extreme realism.
@@ -1075,7 +1075,7 @@ class RapidMockStudio {
     textureMatrix.desaturate();
     textureMatrix.contrast(2, false); // Extreme contrast to isolate grain
     this.textureLayer.filters = [textureMatrix];
-    this.textureLayer.alpha = 0.2; // Reduced texture for smoother ink look
+    this.textureLayer.alpha = 0; // Default to 0
 
     // 3. Highlight Map (Screen): Adds specular sheen on top.
     this.highlightLayer = new PIXI.Sprite(mockupTexture);
@@ -1087,7 +1087,7 @@ class RapidMockStudio {
     highlightMatrix.contrast(2, false); // Only brightest peaks
     highlightMatrix.brightness(0.6, false); // Darken everything else
     this.highlightLayer.filters = [highlightMatrix];
-    this.highlightLayer.alpha = 0.4; // Low opacity to prevent "blown out" whites
+    this.highlightLayer.alpha = 0; // Default to 0
 
     // Build stage
     this.app.stage.addChild(this.background);
@@ -2566,24 +2566,18 @@ class RapidMockStudio {
 
   loadMockupFromLibrary(file) {
     // Determine path with protocol for Electron/Pixi
-    // Ensure properly escaped for URL
-    const safePath = file.path.replace(/\\/g, '/');
+    // Ensure properly escaped for URL (handle spaces etc)
+    const formattedPath = file.path.replace(/\\/g, '/');
+    const safeUrl = `file://${formattedPath.split('/').map(encodeURIComponent).join('/')}`;
 
     // We treat 'data' as the source URL for the image
-    // For local files, we use file://
     this.mockupData = {
       name: file.name,
       path: file.path,
-      data: `file:///${safePath}` // Prepend file:/// (triple slash for Windows root d:/...) 
-      // Actually, for d:/... usually file:///d:/... is safe.
-      // Let's rely on browser to handle 'file://' + absolute path
+      data: safeUrl
     };
 
-    // Fix: Ensure we don't end up with file://d:/... (missing a slash) or file://// (too many)
-    // Electron handles "d:/foo" -> "file:///d:/foo" usually.
-    // Let's try simple concatenation.
-    this.mockupData.data = `file://${safePath}`;
-
+    console.log("Loading Library Mockup:", safeUrl);
     this.mockupInfo.textContent = file.name;
     this.initPixiApp();
     this.closeLibrary();
