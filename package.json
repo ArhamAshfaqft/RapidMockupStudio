@@ -39,7 +39,7 @@
     "nsisWeb": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "appPackageUrl": "https://github.com/ArhamAshfaqft/RapidMockupStudio/releases/download/v1.0.0/",
+      "appPackageUrl": "https://github.com/ArhamAshfaqft/RapidMockupStudio/releases/download/v${version}/",
       "artifactName": "RMS-Web-Setup-${version}.${ext}"
     },
     "mac": {
