@@ -4,7 +4,7 @@ const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
 let store;
-const GUMROAD_PERMALINK = 'rpmm'; // Change this to your actual Gumroad product permalink
+const GUMROAD_PRODUCT_ID = 'iJVxt1YiDSnF5xi2KBGWGQ=='; // Change this to your actual Gumroad product permalink
 
 // --- Auto-Updater Config ---
 autoUpdater.autoDownload = false;
@@ -162,18 +162,18 @@ ipcMain.handle('get-thumbnail', async (event, filePath) => {
 
 // --- Gumroad Licensing Handlers ---
 ipcMain.handle('get-saved-license', () => {
-  if (!app.isPackaged) return 'dev-license';
+  // if (!app.isPackaged) return 'dev-license';
   return store.get('gumroad_license_key') || null;
 });
 
 ipcMain.handle('verify-license', async (event, key) => {
-  if (!app.isPackaged) {
-    return { success: true, message: 'Dev Mode: License bypass active.' };
-  }
+  // if (!app.isPackaged) {
+  //   return { success: true, message: 'Dev Mode: License bypass active.' };
+  // }
   try {
     const https = require('https');
     const postData = JSON.stringify({
-      product_permalink: GUMROAD_PERMALINK,
+      product_id: GUMROAD_PRODUCT_ID,
       license_key: key
     });
 

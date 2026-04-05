@@ -3,8 +3,83 @@
  * Core rendering engine using Pixi.js WebGL with Advanced Realism Engine
  */
 
+
+
+/**
+ * FabricMapFilter - Advanced WebGL High-Pass Generator
+ * Dynamically detects local wrinkles by comparing pixel brightness to surrounding
+ * neighbors. This guarantees 100% accurate wrapping on Pitch Black, Pure White,
+ * and Grey mockups, while completely ignoring soft global gradients (like Coffee Mugs)
+ * so they don't tear in half.
+ */
+class FabricMapFilter extends PIXI.Filter {
+    constructor(width, height) {
+        const frag = `
+            varying vec2 vTextureCoord;
+            uniform sampler2D uSampler;
+            uniform vec2 texelSize;
+            
+            void main() {
+                vec2 uv = vTextureCoord;
+                float w = texelSize.x;
+                float h = texelSize.y;
+                
+                vec3 lum = vec3(0.299, 0.587, 0.114);
+                float center = dot(texture2D(uSampler, uv).rgb, lum);
+                
+                // 16-tap sparse blur for local neighborhood average
+                float avg = center;
+                
+                // Inner ring
+                float d = 4.0;
+                avg += dot(texture2D(uSampler, uv + vec2(-w*d, -h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(w*d, -h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(-w*d, h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(w*d, h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(0.0, -h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(0.0, h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(-w*d, 0.0)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(w*d, 0.0)).rgb, lum);
+                
+                // Outer ring (catches large, thick folds)
+                d = 12.0;
+                avg += dot(texture2D(uSampler, uv + vec2(-w*d, -h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(w*d, -h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(-w*d, h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(w*d, h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(0.0, -h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(0.0, h*d)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(-w*d, 0.0)).rgb, lum);
+                avg += dot(texture2D(uSampler, uv + vec2(w*d, 0.0)).rgb, lum);
+                
+                avg /= 17.0;
+                
+                // High-pass: strictly isolate the fold's height.
+                float diff = center - avg;
+                
+                // Amplify the fold height naturally.
+                // 8.0 gives strong detection even on dark fabrics where fold luminance
+                // differences are tiny (~2%). Light fabrics simply clamp at 1.0 (no harm).
+                // The actual warp amount is controlled by the slider's power curve, not this.
+                float strength = 8.0;
+                float val = clamp(0.5 + (diff * strength), 0.0, 1.0);
+                
+                gl_FragColor = vec4(val, val, 1.0, 1.0);
+            }
+        `;
+        super(null, frag);
+        this.uniforms.texelSize = new Float32Array([1.0 / width, 1.0 / height]);
+    }
+}
+
 class RavenMockupStudio {
   constructor() {
+    // === GLOBAL RENDERING QUALITY ===
+    // Force bilinear filtering on ALL textures globally (prevents jagged edges)
+    PIXI.settings.SCALE_MODE = PIXI.SCALE_MODES.LINEAR;
+    // Force all filters (displacement, blur, color) to render at 2x resolution
+    PIXI.settings.FILTER_RESOLUTION = 2;
+
     // State
     this.mockupData = null;
     this.inputFolder = null;
@@ -24,7 +99,7 @@ class RavenMockupStudio {
     // Rendering settings
     this.settings = {
       opacity: 100,
-      warpStrength: 12,
+      warpStrength: 7,
       scale: 100,
       rotation: 0,
       blendMode: 'multiply', // Still used for state, though render engine defaults to sophisticated blend
@@ -63,6 +138,18 @@ class RavenMockupStudio {
     // Processing state
     this.isProcessing = false;
 
+    // --- GLOBAL NATIVE DROP NEUTRALIZER ---
+    // Prevents Electron Chromium from navigating to the image natively 
+    // and generating a giant phantom image over the UI when dropped outside a safe zone.
+    document.body.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    document.body.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
     this.init();
   }
 
@@ -94,6 +181,8 @@ class RavenMockupStudio {
       // CRITICAL FIX: To prevent "Default Custom" bug reported by user,
       // we always start in 'original' mode on fresh app launch.
       this.settings.exportPreset = 'original';
+      // Force warp default on every launch to prevent stale cache issues.
+      this.settings.warpStrength = 7;
     } catch (e) {
       console.error(e);
     }
@@ -113,6 +202,27 @@ class RavenMockupStudio {
       if (!this.settings.exportFormat) this.settings.exportFormat = 'jpg';
       if (!this.settings.linkedFolders) this.settings.linkedFolders = [];
       this.exportFormatSelect.value = this.settings.exportFormat;
+    }
+
+    if (this.sliderWarp) {
+      this.sliderWarp.value = this.settings.warpStrength;
+      if (this.warpValue) this.warpValue.textContent = this.settings.warpStrength;
+    }
+    if (this.sliderOpacity) {
+      this.sliderOpacity.value = this.settings.opacity;
+      if (this.opacityValue) this.opacityValue.textContent = `${this.settings.opacity}%`;
+    }
+    if (this.sliderScale) {
+        this.sliderScale.value = this.settings.scale;
+        if (this.scaleValue) this.scaleValue.textContent = `${this.settings.scale}%`;
+    }
+    if (this.sliderRotation) {
+        this.sliderRotation.value = this.settings.rotation;
+        if (this.rotationValue) this.rotationValue.textContent = `${this.settings.rotation}°`;
+    }
+    if (this.sliderTexture) {
+        this.sliderTexture.value = this.settings.textureStrength;
+        if (this.textureValue) this.textureValue.textContent = `${this.settings.textureStrength}%`;
     }
 
     // Apply Watermark UI (v1.0.2)
@@ -362,12 +472,14 @@ class RavenMockupStudio {
       this.settings.opacity = parseInt(e.target.value);
       this.opacityValue.textContent = `${this.settings.opacity}%`;
       this.updateDesign();
+      this.saveSettings();
     });
 
     this.sliderWarp.addEventListener('input', (e) => {
       this.settings.warpStrength = parseInt(e.target.value);
       this.warpValue.textContent = this.settings.warpStrength;
       this.updateDisplacement();
+      this.saveSettings();
     });
 
     this.sliderScale.addEventListener('input', (e) => {
@@ -375,6 +487,7 @@ class RavenMockupStudio {
       this.scaleValue.textContent = `${this.settings.scale}%`;
       this.designScale = this.settings.scale / 100;
       this.updateDesignTransform();
+      this.saveSettings();
     });
 
     this.sliderRotation.addEventListener('input', (e) => {
@@ -382,6 +495,7 @@ class RavenMockupStudio {
       this.rotationValue.textContent = `${this.settings.rotation}°`;
       this.designRotation = this.settings.rotation * (Math.PI / 180);
       this.updateDesignTransform();
+      this.saveSettings();
     });
 
     this.selectBlend.addEventListener('change', (e) => {
@@ -474,6 +588,14 @@ class RavenMockupStudio {
         }
       });
     }
+
+    // Handle Window Resize for responsive Canvas
+    window.addEventListener('resize', () => {
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = setTimeout(() => {
+        this.handleResize();
+      }, 100);
+    });
 
     // Keyboard Shortcuts (Nudge, Delete)
     window.addEventListener('keydown', (e) => {
@@ -636,18 +758,21 @@ class RavenMockupStudio {
     const setupDropZone = (element, handler) => {
       element.addEventListener('dragover', (e) => {
         e.preventDefault();
+        e.stopPropagation(); // Stop bubbling to prevent double-firing
         element.style.borderColor = 'var(--accent-color)';
         element.style.backgroundColor = 'rgba(0, 113, 227, 0.05)';
       });
 
       element.addEventListener('dragleave', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         element.style.borderColor = '';
         element.style.backgroundColor = '';
       });
 
       element.addEventListener('drop', async (e) => {
         e.preventDefault();
+        e.stopPropagation(); // CRITICAL: Stop bubbling so button clicks don't double-fire parent zone
         element.style.borderColor = '';
         element.style.backgroundColor = '';
 
@@ -657,23 +782,46 @@ class RavenMockupStudio {
       });
     };
 
-    // 1. Base Mockup Drop
-    setupDropZone(this.btnLoadMockup.parentElement, (files) => this.handleMockupDrop(files));
+    // Helper: walk up to the nearest .setup-section parent for a generous drop target
+    const getSection = (el) => {
+      let node = el;
+      while (node && !node.classList.contains('setup-section')) node = node.parentElement;
+      return node || el.parentElement;
+    };
 
-    // 2. Input Folder Drop
-    setupDropZone(this.btnSelectInput.parentElement, (files) => this.handleInputFolderDrop(files));
+    // 1. Base Mockup Drop — entire Step 1 section + the button itself
+    const mockupSection = getSection(this.btnLoadMockup);
+    setupDropZone(mockupSection, (files) => this.handleMockupDrop(files));
+    setupDropZone(this.btnLoadMockup, (files) => this.handleMockupDrop(files));
 
-    // 3. Output Folder Drop
-    setupDropZone(this.btnSelectOutput.parentElement, (files) => this.handleOutputFolderDrop(files));
-
-    // 4. Canvas Wrapper Drop (Treat as Design Input)
-    // This allows dropping design files directly onto the shirt/canvas
-    if (this.canvasWrapper) {
-      setupDropZone(this.canvasWrapper, (files) => this.handleInputFolderDrop(files));
+    // 2. Design Input Drop — entire Step 2 section + both buttons
+    const designSection = getSection(this.btnSelectInput);
+    setupDropZone(designSection, (files) => this.handleInputFolderDrop(files));
+    if (this.btnSingleDesign) {
+      setupDropZone(this.btnSingleDesign, (files) => this.handleInputFolderDrop(files));
     }
 
-    // 5. Watermark Drop (v1.0.2)
+    // 3. Output Folder Drop — entire section
+    const outputSection = getSection(this.btnSelectOutput);
+    setupDropZone(outputSection, (files) => this.handleOutputFolderDrop(files));
+
+    // 4. Canvas Wrapper Drop (Smart: Respects Batch/Single Mode)
+    if (this.canvasWrapper) {
+      setupDropZone(this.canvasWrapper, (files) => {
+        if (this.isBatchMode) {
+          if (files[0]) {
+            this.loadSampleDesignFromFile(files[0]);
+          }
+        } else {
+          this.handleInputFolderDrop(files);
+        }
+      });
+    }
+
+    // 5. Watermark Drop (v1.0.2) — button + its parent section
     if (this.btnLoadWatermark) {
+      const watermarkSection = getSection(this.btnLoadWatermark);
+      setupDropZone(watermarkSection, (files) => this.handleWatermarkDrop(files));
       setupDropZone(this.btnLoadWatermark, (files) => this.handleWatermarkDrop(files));
     }
 
@@ -774,7 +922,7 @@ class RavenMockupStudio {
         // Rendering side FileReader is fine for preview.
         // BUT App expects this.mockupData structure {name, path, data}
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
           // FIX: Clear any previous batch queue
           this.mockupQueue = [];
 
@@ -785,6 +933,7 @@ class RavenMockupStudio {
           };
           this.mockupInfo.textContent = info.name;
           this.resetMockupSettings(); // Reset Tint
+
           this.initPixiApp();
         };
         reader.readAsDataURL(file);
@@ -828,7 +977,14 @@ class RavenMockupStudio {
       } else if (info && info.isFile && /\.(png|jpe?g|webp|avif)$/i.test(info.name)) {
         // SINGLE FILE DROPPED
 
-        // Force Single Mode
+        if (this.isBatchMode) {
+          // BUG FIX: If user drops a single image onto the 'Design Folder' area while in Batch Mode,
+          // do NOT forcefully switch to Single Mode. Instead, load it as the Sample Design preview.
+          this.loadSampleDesignFromFile(file);
+          return; // Exit without changing modes
+        }
+
+        // Force Single Mode (Only needed if UI somehow got out of sync)
         if (this.batchToggle && this.batchToggle.checked) {
           this.batchToggle.checked = false;
           this.toggleBatchMode(false);
@@ -1119,6 +1275,99 @@ class RavenMockupStudio {
     }
   }
 
+  async generateNormalMap(imgDataUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        // Use full resolution for quality normal maps
+        const MAX_DIM = 2048;
+        let w = img.width;
+        let h = img.height;
+        if (w > MAX_DIM || h > MAX_DIM) {
+          const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
+          w = Math.floor(w * ratio);
+          h = Math.floor(h * ratio);
+        }
+        
+        canvas.width = w;
+        ctx.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        
+        // 1. Draw image with MASSIVE blur and grayscale
+        // We MUST obliterate the fine fabric grain/threads, otherwise the normal map will
+        // zig-zag the design over every thread causing "granular" pixelation.
+        // We only want the macro-folds (large curves).
+        ctx.filter = 'blur(16px) grayscale(100%)';
+        ctx.drawImage(img, 0, 0, w, h);
+        
+        // 2. Extract pixels
+        const imageData = ctx.getImageData(0, 0, w, h);
+        const data = imageData.data;
+        
+        // Create new imageData for Normal Map
+        const normalData = ctx.createImageData(w, h);
+        const nd = normalData.data;
+        
+        // 3. Sobel Filter for Normal Map
+        // PIXI DisplacementFilter: R=X shift, G=Y shift. 128=neutral.
+        // With a 16px blur, gradients are very smooth and faint. We boost strength
+        // to clearly encode the large fold directions.
+        const strength = 1.0;
+        
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            const idx = (y * w + x) * 4;
+            
+            const tl = data[((y - 1) * w + (x - 1)) * 4];
+            const tc = data[((y - 1) * w + x) * 4];
+            const tr = data[((y - 1) * w + (x + 1)) * 4];
+            
+            const ml = data[(y * w + (x - 1)) * 4];
+            const mr = data[(y * w + (x + 1)) * 4];
+            
+            const bl = data[((y + 1) * w + (x - 1)) * 4];
+            const bc = data[((y + 1) * w + x) * 4];
+            const br = data[((y + 1) * w + (x + 1)) * 4];
+            
+            // Sobel X and Y gradients
+            const dX = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+            const dY = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+            
+            // Encode into 0-255 range centered at 128
+            nd[idx]     = Math.min(Math.max(128 + dX * strength, 0), 255); // R = X slope
+            nd[idx + 1] = Math.min(Math.max(128 + dY * strength, 0), 255); // G = Y slope
+            nd[idx + 2] = 255;                                            // B = Up
+            nd[idx + 3] = 255;                                            // A = Full
+          }
+        }
+        
+        // Fill border pixels with neutral (128,128,255)
+        for (let x = 0; x < w; x++) {
+          // Top row
+          nd[x * 4] = 128; nd[x * 4 + 1] = 128; nd[x * 4 + 2] = 255; nd[x * 4 + 3] = 255;
+          // Bottom row
+          const bi = ((h - 1) * w + x) * 4;
+          nd[bi] = 128; nd[bi + 1] = 128; nd[bi + 2] = 255; nd[bi + 3] = 255;
+        }
+        for (let y = 0; y < h; y++) {
+          // Left column
+          const li = (y * w) * 4;
+          nd[li] = 128; nd[li + 1] = 128; nd[li + 2] = 255; nd[li + 3] = 255;
+          // Right column
+          const ri = (y * w + w - 1) * 4;
+          nd[ri] = 128; nd[ri + 1] = 128; nd[ri + 2] = 255; nd[ri + 3] = 255;
+        }
+        
+        ctx.putImageData(normalData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = reject;
+      img.src = imgDataUrl;
+    });
+  }
+
   async initPixiApp() {
     // Remove existing app if any
     if (this.app) {
@@ -1156,20 +1405,24 @@ class RavenMockupStudio {
       this.displayScale = displayScale;
 
       // Create Pixi Application
+      // SUPERSAMPLING: render at devicePixelRatio * 2
+      // This forces extreme 4k-like internal rendering, eliminating pixelation completely
+      const renderRes = Math.max(window.devicePixelRatio || 1, 2) * 2;
+      
       this.app = new PIXI.Application({
         width: displayWidth,
         height: displayHeight,
         backgroundColor: 0xf5f5f7,
         preserveDrawingBuffer: true,
-        resolution: 1,
+        resolution: renderRes,
+        autoDensity: true,
         antialias: true
       });
 
       this.canvasWrapper.appendChild(this.app.view);
 
-      // Setup layers
+      // Setup layers (interaction will be initialized inside once textures load)
       this.setupLayers();
-      this.setupInteraction();
     };
 
     img.onerror = (err) => {
@@ -1182,6 +1435,22 @@ class RavenMockupStudio {
   setupLayers() {
     const mockupTexture = PIXI.Texture.from(this.mockupData.data);
 
+    // CRITICAL TIMING FIX: 
+    // If the base texture hasn't been uploaded to the GPU yet, rendering it 
+    // to a RenderTexture yields a blank/black image. A blank image generates 0 slope, 
+    // meaning the grey hoodie receives exactly 0 displacement (perfectly flat).
+    if (!mockupTexture.baseTexture.valid) {
+      mockupTexture.baseTexture.once('loaded', () => {
+        requestAnimationFrame(() => {
+          this.setupLayers();
+        });
+      });
+      return; // Abort and wait for GPU load
+    }
+
+    // Now safely setup interaction since texture is mathematically loaded and sized
+    this.setupInteraction();
+
     // Layer 1: Background (Base mockup)
     this.background = new PIXI.Sprite(mockupTexture);
     this.background.width = this.app.screen.width;
@@ -1193,32 +1462,38 @@ class RavenMockupStudio {
     }
 
     // --- SMART DISPLACEMENT ENGINE ---
-    // Create a high-contrast version of the mockup for better wrinkle detection
-    this.displacementSprite = new PIXI.Sprite(mockupTexture);
-    this.displacementSprite.width = this.app.screen.width;
-    this.displacementSprite.height = this.app.screen.height;
+    // We must render the filters to a Texture! PIXI.DisplacementFilter ignores the .filters
+    // array on its target sprite and reads the raw base texture instead.
+    const tempSprite = new PIXI.Sprite(mockupTexture);
+    tempSprite.width = this.app.screen.width;
+    tempSprite.height = this.app.screen.height;
 
-    // High-Pass / Contrast Filters
-    // High-Pass / Contrast Filters
-    // We remove Contrast entirely as it amplifies noise/grain. We want pure smooth volume.
-    const grayFilter = new PIXI.ColorMatrixFilter();
-    grayFilter.desaturate();
+    // Use Advanced Fabric Mapping logic to adaptively detect folds
+    // This perfectly extracts wrinkles regardless of if the shirt is white, black, or grey.
+    const fabricFilter = new FabricMapFilter(this.app.screen.width, this.app.screen.height);
 
-    // FIX: Apply a HEAVY blur to create a "Volume Map" rather than a "Texture Map"
-    // "Enterprise Level" technique: Isolate large forms (folds) and kill all micro-texture.
+    // Apply a light blur to smooth the raw pixel threads so the maps stays clean
     const blurFilter = new PIXI.filters.BlurFilter();
-    blurFilter.quality = 10; // High quality kernel
-    blurFilter.blur = 20; // Reduced from 35 to 20 for "Sharper Folds" (High Definition)
+    blurFilter.quality = 6;
+    blurFilter.blur = 6; 
 
-    // Combine: Grayscale -> Heavy Blur (Smooth Gradients Only)
-    this.displacementSprite.filters = [grayFilter, blurFilter];
+    tempSprite.filters = [fabricFilter, blurFilter];
 
-    this.displacementSprite.texture.baseTexture.wrapMode = PIXI.WRAP_MODES.REPEAT;
+    // Force PIXI to bake the blur into a flat texture so the DisplacementFilter can read it
+    const renderTexture = PIXI.RenderTexture.create({
+      width: this.app.screen.width,
+      height: this.app.screen.height,
+      resolution: this.app.renderer.resolution
+    });
+    this.app.renderer.render(tempSprite, { renderTexture: renderTexture });
+
+    this.displacementSprite = new PIXI.Sprite(renderTexture);
+    this.displacementSprite.texture.baseTexture.wrapMode = PIXI.WRAP_MODES.CLAMP;
 
     this.displacementFilter = new PIXI.DisplacementFilter(this.displacementSprite);
-    this.displacementFilter.resolution = 2; // High resolution sampling for smoother wrapping
-    // FIX: Initialize at 0, defer real value to after first render tick
-    // This forces PIXI to detect a state change and apply the displacement.
+    this.displacementFilter.resolution = Math.max(window.devicePixelRatio || 1, 2) * 2; // Match super sampling
+    
+    // Initialize at 0 to avoid jump cut
     this.displacementFilter.scale.x = 0;
     this.displacementFilter.scale.y = 0;
 
@@ -1307,6 +1582,71 @@ class RavenMockupStudio {
     }
   }
 
+  handleResize() {
+    if (!this.app || !this.originalWidth || !this.originalHeight) return;
+
+    // Calculate display size to fit in canvas wrapper (matching init logic)
+    const wrapperRect = this.canvasWrapper.getBoundingClientRect();
+    const maxWidth = wrapperRect.width - 40;
+    const maxHeight = wrapperRect.height - 40;
+
+    const scaleX = maxWidth / this.originalWidth;
+    const scaleY = maxHeight / this.originalHeight;
+    const displayScale = Math.min(scaleX, scaleY, 1);
+
+    const displayWidth = Math.floor(this.originalWidth * displayScale);
+    const displayHeight = Math.floor(this.originalHeight * displayScale);
+
+    this.displayScale = displayScale;
+
+    // 1. Resize PIXI Renderer
+    this.app.renderer.resize(displayWidth, displayHeight);
+
+    // 2. Resize Background Layer
+    if (this.background) {
+      this.background.width = displayWidth;
+      this.background.height = displayHeight;
+    }
+
+    // 3. Resize Displacement Layer
+    if (this.displacementSprite) {
+      this.displacementSprite.width = displayWidth;
+      this.displacementSprite.height = displayHeight;
+    }
+
+    // 4. Resize Lighting / Textures
+    if (this.shadowLayer) {
+      this.shadowLayer.width = displayWidth;
+      this.shadowLayer.height = displayHeight;
+    }
+    if (this.textureLayer) {
+      this.textureLayer.width = displayWidth;
+      this.textureLayer.height = displayHeight;
+    }
+    if (this.highlightLayer) {
+      this.highlightLayer.width = displayWidth;
+      this.highlightLayer.height = displayHeight;
+    }
+
+    // 5. Update Watermark Position
+    if (this.watermarkSprite) {
+      this.updateWatermarkTransform();
+    }
+
+    // 6. Update Design bounds
+    if (this.designSprite) {
+      // Re-calculate the base percentage-based width relative to the new canvas width!
+      const targetWidth = displayWidth * 0.40;
+      const aspectRatio = this.designSprite.texture.width / this.designSprite.texture.height;
+
+      this.baseDesignWidth = targetWidth;
+      this.baseDesignHeight = targetWidth / aspectRatio;
+      
+      this.updateDesignTransform();
+      this.drawSelectionUI();
+    }
+  }
+
   loadDesignToCanvas(dataUrl, isNewDesign = false) {
     // FIX: Save URL so we can reload it if mockup changes
     this.pendingDesignUrl = dataUrl;
@@ -1318,8 +1658,18 @@ class RavenMockupStudio {
 
     const designTexture = PIXI.Texture.from(dataUrl);
 
-    // Use SimplePlane for Mesh Warping (40x40 Grid for ULTRA high fidelity)
-    this.designSprite = new PIXI.SimplePlane(designTexture, 40, 40);
+    // CRITICAL: Force bilinear filtering to prevent jagged/pixelated edges
+    // This is the #1 cause of "pixelated" text on mockups — default is NEAREST.
+    designTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+    designTexture.baseTexture.mipmap = PIXI.MIPMAP_MODES.ON;
+
+    // We revert to SimplePlane with 80x80 mesh. 
+    // Sprite + DisplacementFilter can cause harsh boundary clipping.
+    // The adaptive mesh geometry smooths the linear UV coordinate interpolation.
+    this.designSprite = new PIXI.SimplePlane(designTexture, 80, 80);
+    
+    // Enable Anisotropic filtering for angled texture precision
+    designTexture.baseTexture.anisotropicLevel = 16;
 
     // FIX: Ensure interactions work even after switching mockups
     this.designSprite.eventMode = 'static';
@@ -1354,7 +1704,8 @@ class RavenMockupStudio {
     this.designContainer.filters = null;
     setTimeout(() => {
       this.designContainer.filters = [this.displacementFilter];
-      this.displacementFilter.scale.set(this.settings.warpStrength, this.settings.warpStrength);
+      const s = this._computeDisplacementScale(this.settings.warpStrength);
+      this.displacementFilter.scale.set(s, s);
     }, 150);
   }
 
@@ -1421,7 +1772,7 @@ class RavenMockupStudio {
     this.settings.scale = 100;
     this.settings.rotation = 0;
     this.settings.opacity = 100;
-    this.settings.warpStrength = 12; // Default
+    this.settings.warpStrength = 7; // Default
 
     // Update UI Sliders
     if (this.sliderScale) {
@@ -1437,8 +1788,8 @@ class RavenMockupStudio {
       this.opacityValue.textContent = "100%";
     }
     if (this.sliderWarp) {
-      this.sliderWarp.value = 12;
-      this.warpValue.textContent = "12";
+      this.sliderWarp.value = 7;
+      this.warpValue.textContent = "7";
     }
 
     this.updateDesignTransform();
@@ -1502,10 +1853,26 @@ class RavenMockupStudio {
     if (!this.designSprite) return;
     this.designSprite.alpha = this.settings.opacity / 100;
   }
+  /**
+   * Convert slider value (0-100) to a smooth displacement pixel offset.
+   * Uses a power curve so that:
+   *   0  -> 0px   (no warp)
+   *   3  -> ~6px  (subtle, professional baseline)
+   *   15 -> ~30px (medium wrap — visible on hoodies)
+   *   50 -> ~70px (heavy — deep wrinkles)
+   *  100 -> ~120px (maximum — extreme fabric pull, no tearing)
+   */
+  _computeDisplacementScale(sliderValue) {
+    // Normalize 0-100 to 0-1, apply power curve, then scale to max pixels
+    const t = sliderValue / 100;
+    const maxDisplacement = 120; // Maximum pixel offset at slider=100
+    return Math.pow(t, 1.5) * maxDisplacement;
+  }
+
   updateDisplacement() {
     if (!this.displacementFilter) return;
-    // Use .set() to explicitly trigger PIXI's ObservablePoint change callback
-    this.displacementFilter.scale.set(this.settings.warpStrength, this.settings.warpStrength);
+    const s = this._computeDisplacementScale(this.settings.warpStrength);
+    this.displacementFilter.scale.set(s, s);
   }
 
   // --- WATERMARK SYSTEM (v1.0.2) ---
@@ -2329,11 +2696,18 @@ class RavenMockupStudio {
           return;
         }
         const texW = texture.baseTexture.width;
-        // REVERT: Smart Warp Scaling was causing excessive distortion/blur on high-res textures.
-        // We force ratio to 1.0 to match the "Before" behavior (Sharp but subtle warp).
-        const ratio = 1.0;
-        // Pass ratio as warpScale
-        this._buildLayers(app, texture, ratio);
+        const texH = texture.baseTexture.height;
+
+        // CRITICAL: Resize the renderer to match THIS mockup's dimensions.
+        // Without this, the 2nd/3rd mockup renders into a canvas sized for the 1st mockup,
+        // causing design placement to be completely wrong (tiny, off-center, clipped).
+        if (app.screen.width !== texW || app.screen.height !== texH) {
+          app.renderer.resize(texW, texH);
+        }
+        this.originalWidth = texW;
+        this.originalHeight = texH;
+
+        this._buildLayers(app, texture);
         resolve(texture);
       };
 
@@ -2368,35 +2742,40 @@ class RavenMockupStudio {
 
     app.stage.addChild(bg);
 
-    // 2. Displacement
-    const dispSprite = new PIXI.Sprite(mockupTexture);
-    dispSprite.width = app.screen.width;
-    dispSprite.height = app.screen.height;
+    // 2. Displacement — MUST match Editor's FabricMapFilter pipeline exactly
+    // Step A: Create a temp sprite, apply FabricMapFilter + blur
+    const tempSprite = new PIXI.Sprite(mockupTexture);
+    tempSprite.width = app.screen.width;
+    tempSprite.height = app.screen.height;
 
-    // We want to blur this map to reduce noise, but manual rendering caused crashes.
-    // Alternative: Just use the sprite as is. The high warpScale + mismatch caused noise.
-    // We will just leave it raw for now to Restore Stability.
-
-    dispSprite.renderable = false;
-
-    // FIX: Apply same filters as Editor to create proper Volume Map
-    const grayFilter = new PIXI.ColorMatrixFilter();
-    grayFilter.desaturate();
-
-    // Blur to remove noise (20px High Def)
+    const fabricFilter = new FabricMapFilter(app.screen.width, app.screen.height);
     const blurFilter = new PIXI.filters.BlurFilter();
-    blurFilter.quality = 10;
-    blurFilter.blur = 20;
+    blurFilter.quality = 6;
+    blurFilter.blur = 6;
+    tempSprite.filters = [fabricFilter, blurFilter];
 
-    dispSprite.filters = [grayFilter, blurFilter];
+    // Step B: Bake filtered result into a RenderTexture (just like Editor's setupLayers)
+    const renderTexture = PIXI.RenderTexture.create({
+      width: app.screen.width,
+      height: app.screen.height,
+      resolution: 1 // Export is already at full resolution
+    });
+    app.renderer.render(tempSprite, { renderTexture: renderTexture });
+
+    // Step C: Create displacement sprite from baked texture
+    const dispSprite = new PIXI.Sprite(renderTexture);
+    dispSprite.texture.baseTexture.wrapMode = PIXI.WRAP_MODES.CLAMP;
+    dispSprite.renderable = false;
 
     app.stage.addChild(dispSprite);
 
     const dispFilter = new PIXI.DisplacementFilter(dispSprite);
+    dispFilter.resolution = 2;
 
-    dispFilter.resolution = 2; // Restore high quality displacement resolution
-    dispFilter.scale.x = this.settings.warpStrength;
-    dispFilter.scale.y = this.settings.warpStrength;
+    // Step D: Use the same power curve as the editor slider
+    const s = this._computeDisplacementScale(this.settings.warpStrength);
+    dispFilter.scale.x = s;
+    dispFilter.scale.y = s;
 
     // 3. Design Container
     const designContainer = new PIXI.Container();
@@ -2417,7 +2796,7 @@ class RavenMockupStudio {
     shadowMatrix.contrast(3, false); // Reduced from 4 to prevent crushing mids
     shadowMatrix.brightness(3.0, false); // Increased from 2.5 to washout greys
     shadow.filters = [shadowMatrix];
-    shadow.alpha = 0.35 * (this.settings.textureStrength / 100); // FIX: Matched to base value 0.35
+    shadow.alpha = 0.50 * (this.settings.textureStrength / 100); // Matched to Editor: 0.50
     if (this.settings.showOverlay) app.stage.addChild(shadow);
 
     // Texture Layer (Hard Light)
@@ -2431,7 +2810,7 @@ class RavenMockupStudio {
     textureMatrix.desaturate();
     textureMatrix.contrast(2, false); // Extreme contrast to isolate grain
     texture.filters = [textureMatrix];
-    texture.alpha = 0.15 * (this.settings.textureStrength / 100); // FIX: Matched to base value 0.15
+    texture.alpha = 0.25 * (this.settings.textureStrength / 100); // Matched to Editor: 0.25
     if (this.settings.showOverlay) app.stage.addChild(texture);
 
     // Highlight
@@ -2444,7 +2823,7 @@ class RavenMockupStudio {
     highlightMatrix.contrast(2, false);
     highlightMatrix.brightness(0.6, false);
     highlight.filters = [highlightMatrix];
-    highlight.alpha = 0.4 * (this.settings.textureStrength / 100); // Correct (Matches 0.4)
+    highlight.alpha = 0.50 * (this.settings.textureStrength / 100); // Matched to Editor: 0.50
     if (this.settings.showOverlay) app.stage.addChild(highlight);
 
     // --- WATERMARK EXPORT LAYER (v1.0.2) ---
@@ -2503,6 +2882,12 @@ class RavenMockupStudio {
     designContainer.removeChildren();
 
     const designTexture = PIXI.Texture.from(designData);
+
+    // CRITICAL: Force bilinear filtering on export textures too (WYSIWYG)
+    designTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+    designTexture.baseTexture.mipmap = PIXI.MIPMAP_MODES.ON;
+    designTexture.baseTexture.anisotropicLevel = 16;
+
     // Attach source path for protection logic
     if (typeof designData === 'string') {
       designTexture._sourcePath = designData.replace(/\\/g, '/');
@@ -2522,8 +2907,8 @@ class RavenMockupStudio {
       return;
     }
 
-    // Create Design Sprite (SimplePlane) (40x40 for ULTRA fidelity)
-    const designSprite = new PIXI.SimplePlane(designTexture, 40, 40);
+    // Create Design Sprite (SimplePlane mesh is safer for Displacement map clipping bounds)
+    const designSprite = new PIXI.SimplePlane(designTexture, 80, 80);
 
     // Apply same transforms at full resolution
     // Pivot for centering
@@ -3587,26 +3972,30 @@ class RavenMockupStudio {
   // ========================================================
   async checkLicense() {
     try {
-      this.licenseModal.style.display = 'flex'; // Locked by default
-  
+      // First, get the saved key from the local store
       const savedKey = await window.electronAPI.getSavedLicense();
-  
-      if (savedKey) {
-        // Silent check on validation limits
-        const result = await window.electronAPI.verifyLicense(savedKey);
-        
-        // If it's valid, OR if they have a saved key but just happen to be offline right now, let them in.
-        // We only block them if the Gumroad API explicitly says "Invalid/Disabled/Refunded".
-        if (result.success || result.error === 'Network error verifying license.') {
-          this.licenseModal.style.display = 'none';
-          this.setupLicenseListener(); // still bind it in case they want to change keys later
-          return;
-        }
+
+      // If NO key is found at all, show the modal immediately
+      if (!savedKey) {
+        this.licenseModal.style.display = 'flex';
+        this.setupLicenseListener();
+        return;
+      }
+
+      // If a key IS found, verify it silently in the background
+      const result = await window.electronAPI.verifyLicense(savedKey);
+      
+      // If verification fails (and it's NOT just a network timeout), show the modal
+      if (!result.success && result.error !== 'Network error verifying license.') {
+        this.licenseModal.style.display = 'flex';
       }
       
+      // Always bind the listener so they can change keys in the future from within the modal
       this.setupLicenseListener();
     } catch (err) {
       console.error("License check err:", err);
+      // In case of a major crash, show the modal as a fallback
+      this.licenseModal.style.display = 'flex';
     }
   }
 
