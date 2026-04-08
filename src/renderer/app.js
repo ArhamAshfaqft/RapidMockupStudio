@@ -2653,8 +2653,21 @@ class RavenMockupStudio {
         // Let's force destroy the stage children (Background, displacement, etc)
         // exportApp.stage.removeChildren(); // destroy handled in setupExportStage or final
 
-        // Explicitly destroy children to free RAM before next mockup load
-        exportApp.stage.removeChildren();
+        // Explicitly destroy children and clean VRAM before next mockup load
+        // We MUST destroy the baked RenderTexture (FabricMap displacement) to prevent VRAM crashes.
+        while (exportApp.stage.children.length > 0) {
+          const child = exportApp.stage.children[0];
+          
+          if (child instanceof PIXI.Sprite && child.texture instanceof PIXI.RenderTexture) {
+            // Destroy the generated displacement map texture to free heavy GPU memory
+            child.destroy({ children: true, texture: true, baseTexture: true });
+          } else if (child instanceof PIXI.Container) {
+            // Normal layers (mockup, shadows, etc): Do NOT destroy baseTexture to preserve cache/UI
+            child.destroy({ children: true, texture: false, baseTexture: false });
+          } else {
+            child.destroy();
+          }
+        }
       }
 
       this.progressText.textContent = `Complete! ${processed} files generated.`;
